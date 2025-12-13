@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Copy, Play, Pause, RotateCcw, Plus } from "lucide-react"
+import { Copy, Play, Pause, RotateCcw, Plus, Settings } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
 type SessionState = "idle" | "running" | "paused"
@@ -19,6 +19,8 @@ interface PomodoroSession {
   session_type: SessionType
   started_at: string | null
   updated_at: string
+  work_duration: number
+  break_duration: number
 }
 
 interface SessionParticipant {
@@ -35,23 +37,28 @@ export function PomodoroTimer() {
   const [currentSession, setCurrentSession] = useState<PomodoroSession | null>(null)
   const [participants, setParticipants] = useState<SessionParticipant[]>([])
   const [isJoined, setIsJoined] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [workMinutes, setWorkMinutes] = useState(25)
+  const [breakMinutes, setBreakMinutes] = useState(5)
   const { toast } = useToast()
   const supabase = createClient()
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  // Format time for display
+  useEffect(() => {
+    audioRef.current = new Audio("/notification.mp3")
+  }, [])
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }
 
-  // Generate random session key
   const generateSessionKey = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase()
   }
 
-  // Create new session
   const createNewSession = async () => {
     const newKey = generateSessionKey()
 
@@ -60,8 +67,10 @@ export function PomodoroTimer() {
       .insert({
         session_key: newKey,
         state: "idle",
-        time_remaining: WORK_TIME,
+        time_remaining: workMinutes * 60,
         session_type: "work",
+        work_duration: workMinutes * 60,
+        break_duration: breakMinutes * 60,
       })
       .select()
       .single()
@@ -87,7 +96,6 @@ export function PomodoroTimer() {
     setSessionKey(newKey)
   }
 
-  // Join session
   const joinSession = async () => {
     if (!sessionKey.trim() || !userName.trim()) {
       toast({
@@ -98,7 +106,6 @@ export function PomodoroTimer() {
       return
     }
 
-    // Check if session exists
     const { data: session, error: sessionError } = await supabase
       .from("pomodoro_sessions")
       .select("*")
@@ -114,7 +121,6 @@ export function PomodoroTimer() {
       return
     }
 
-    // Add participant
     const { error: participantError } = await supabase.from("session_participants").insert({
       session_id: session.id,
       user_name: userName.trim(),
@@ -132,6 +138,8 @@ export function PomodoroTimer() {
 
     setCurrentSession(session)
     setIsJoined(true)
+    setWorkMinutes(Math.floor(session.work_duration / 60))
+    setBreakMinutes(Math.floor(session.break_duration / 60))
 
     toast({
       title: "Joined Session",
@@ -139,7 +147,6 @@ export function PomodoroTimer() {
     })
   }
 
-  // Control timer
   const startTimer = async () => {
     if (!currentSession) return
 
@@ -161,7 +168,8 @@ export function PomodoroTimer() {
   const resetTimer = async () => {
     if (!currentSession) return
 
-    const resetTime = currentSession.session_type === "work" ? WORK_TIME : BREAK_TIME
+    const resetTime =
+      currentSession.session_type === "work" ? currentSession.work_duration : currentSession.break_duration
 
     await supabase
       .from("pomodoro_sessions")
@@ -173,7 +181,33 @@ export function PomodoroTimer() {
       .eq("id", currentSession.id)
   }
 
-  // Local timer countdown
+  const updateDurations = async () => {
+    if (!currentSession) return
+
+    const newWorkDuration = workMinutes * 60
+    const newBreakDuration = breakMinutes * 60
+
+    await supabase
+      .from("pomodoro_sessions")
+      .update({
+        work_duration: newWorkDuration,
+        break_duration: newBreakDuration,
+        time_remaining:
+          currentSession.state === "idle"
+            ? currentSession.session_type === "work"
+              ? newWorkDuration
+              : newBreakDuration
+            : currentSession.time_remaining,
+      })
+      .eq("id", currentSession.id)
+
+    setShowSettings(false)
+    toast({
+      title: "Durations Updated",
+      description: "Timer settings synced across all participants",
+    })
+  }
+
   useEffect(() => {
     if (!currentSession || currentSession.state !== "running") {
       if (timerRef.current) {
@@ -187,7 +221,15 @@ export function PomodoroTimer() {
       if (currentSession.time_remaining <= 1) {
         clearInterval(timerRef.current!)
 
-        // Timer completed
+        if (audioRef.current) {
+          try {
+            audioRef.current.currentTime = 0
+            await audioRef.current.play()
+          } catch (err) {
+            console.error("[v0] Audio play failed:", err)
+          }
+        }
+
         await supabase
           .from("pomodoro_sessions")
           .update({
@@ -201,7 +243,6 @@ export function PomodoroTimer() {
           description: currentSession.session_type === "work" ? "Take a break!" : "Back to work!",
         })
       } else {
-        // Update time remaining
         await supabase
           .from("pomodoro_sessions")
           .update({
@@ -218,7 +259,6 @@ export function PomodoroTimer() {
     }
   }, [currentSession, supabase, toast])
 
-  // Subscribe to session changes
   useEffect(() => {
     if (!currentSession) return
 
@@ -248,7 +288,6 @@ export function PomodoroTimer() {
           filter: `session_id=eq.${currentSession.id}`,
         },
         async () => {
-          // Refresh participants list
           const { data } = await supabase
             .from("session_participants")
             .select("user_name")
@@ -261,7 +300,6 @@ export function PomodoroTimer() {
       )
       .subscribe()
 
-    // Load initial participants
     supabase
       .from("session_participants")
       .select("user_name")
@@ -275,7 +313,6 @@ export function PomodoroTimer() {
     }
   }, [currentSession, supabase])
 
-  // Check for session key in URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const urlSessionKey = params.get("session")
@@ -304,6 +341,40 @@ export function PomodoroTimer() {
         </div>
 
         <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
+          <div className="space-y-4 pb-6 border-b-2 border-black/10">
+            <h3 className="text-sm font-medium text-black">Timer Settings</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label htmlFor="work-minutes" className="text-xs text-black/60">
+                  Work (min)
+                </label>
+                <Input
+                  id="work-minutes"
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={workMinutes}
+                  onChange={(e) => setWorkMinutes(Number.parseInt(e.target.value) || 25)}
+                  className="border-black rounded-none text-black"
+                />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="break-minutes" className="text-xs text-black/60">
+                  Break (min)
+                </label>
+                <Input
+                  id="break-minutes"
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={breakMinutes}
+                  onChange={(e) => setBreakMinutes(Number.parseInt(e.target.value) || 5)}
+                  className="border-black rounded-none text-black"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <label htmlFor="session-key" className="text-sm font-medium text-black">
               Session Key
@@ -395,7 +466,60 @@ export function PomodoroTimer() {
           >
             <RotateCcw className="h-5 w-5" />
           </Button>
+
+          <Button
+            onClick={() => setShowSettings(!showSettings)}
+            size="lg"
+            variant="outline"
+            className="h-16 w-16 rounded-full border-2 border-black hover:bg-black hover:text-white p-0 bg-transparent"
+          >
+            <Settings className="h-5 w-5" />
+          </Button>
         </div>
+
+        {showSettings && (
+          <Card className="p-6 border-2 border-black shadow-none rounded-none">
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium text-black">Timer Settings</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label htmlFor="work-minutes-update" className="text-xs text-black/60">
+                    Work Duration (minutes)
+                  </label>
+                  <Input
+                    id="work-minutes-update"
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={workMinutes}
+                    onChange={(e) => setWorkMinutes(Number.parseInt(e.target.value) || 25)}
+                    className="border-black rounded-none text-black"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="break-minutes-update" className="text-xs text-black/60">
+                    Break Duration (minutes)
+                  </label>
+                  <Input
+                    id="break-minutes-update"
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={breakMinutes}
+                    onChange={(e) => setBreakMinutes(Number.parseInt(e.target.value) || 5)}
+                    className="border-black rounded-none text-black"
+                  />
+                </div>
+              </div>
+              <Button
+                onClick={updateDurations}
+                className="w-full bg-black text-white hover:bg-black/90 rounded-none h-10 font-medium"
+              >
+                Update Durations
+              </Button>
+            </div>
+          </Card>
+        )}
 
         {participants.length > 0 && (
           <div className="pt-8 border-t-2 border-black/10">
