@@ -441,8 +441,8 @@ export function PomodoroTimer() {
           <h1 className="text-9xl font-bold font-mono tracking-tighter text-black tabular-nums">
             {formatTime(currentSession?.time_remaining || 0)}
           </h1>
+					<p className="text-sm uppercase tracking-widest text-black/60 font-medium">
 
-          <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
             {currentSession?.session_type.replace("_", " ")}
           </p>
         </div>
