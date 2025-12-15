@@ -67,10 +67,10 @@ export function PomodoroTimer() {
       .insert({
         session_key: newKey,
         state: "idle",
-        time_remaining: workMinutes * 60,
+        time_remaining: 25 * 60,
         session_type: "work",
-        work_duration: workMinutes * 60,
-        break_duration: breakMinutes * 60,
+        work_duration: 25 * 60,
+        break_duration: 5 * 60,
       })
       .select()
       .single()
@@ -181,6 +181,28 @@ export function PomodoroTimer() {
       .eq("id", currentSession.id)
   }
 
+  const switchSessionType = async () => {
+    if (!currentSession) return
+
+    const newType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+    const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
+
+    await supabase
+      .from("pomodoro_sessions")
+      .update({
+        session_type: newType,
+        time_remaining: newTime,
+        state: "idle",
+        started_at: null,
+      })
+      .eq("id", currentSession.id)
+
+    toast({
+      title: "Session Switched",
+      description: `Now in ${newType} mode`,
+    })
+  }
+
   const updateDurations = async () => {
     if (!currentSession) return
 
@@ -230,17 +252,21 @@ export function PomodoroTimer() {
           }
         }
 
+        const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+        const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
+
         await supabase
           .from("pomodoro_sessions")
           .update({
             state: "idle",
-            time_remaining: 0,
+            time_remaining: nextTime,
+            session_type: nextType,
           })
           .eq("id", currentSession.id)
 
         toast({
           title: "Time's Up!",
-          description: currentSession.session_type === "work" ? "Take a break!" : "Back to work!",
+          description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
         })
       } else {
         await supabase
@@ -341,40 +367,6 @@ export function PomodoroTimer() {
         </div>
 
         <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
-          <div className="space-y-4 pb-6 border-b-2 border-black/10">
-            <h3 className="text-sm font-medium text-black">Timer Settings</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label htmlFor="work-minutes" className="text-xs text-black/60">
-                  Work (min)
-                </label>
-                <Input
-                  id="work-minutes"
-                  type="number"
-                  min="1"
-                  max="60"
-                  value={workMinutes}
-                  onChange={(e) => setWorkMinutes(Number.parseInt(e.target.value) || 25)}
-                  className="border-black rounded-none text-black"
-                />
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="break-minutes" className="text-xs text-black/60">
-                  Break (min)
-                </label>
-                <Input
-                  id="break-minutes"
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={breakMinutes}
-                  onChange={(e) => setBreakMinutes(Number.parseInt(e.target.value) || 5)}
-                  className="border-black rounded-none text-black"
-                />
-              </div>
-            </div>
-          </div>
-
           <div className="space-y-2">
             <label htmlFor="session-key" className="text-sm font-medium text-black">
               Session Key
@@ -441,8 +433,8 @@ export function PomodoroTimer() {
           <h1 className="text-9xl font-bold font-mono tracking-tighter text-black tabular-nums">
             {formatTime(currentSession?.time_remaining || 0)}
           </h1>
-					<p className="text-sm uppercase tracking-widest text-black/60 font-medium">
 
+          <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
             {currentSession?.session_type.replace("_", " ")}
           </p>
         </div>
@@ -476,6 +468,14 @@ export function PomodoroTimer() {
             <Settings className="h-5 w-5" />
           </Button>
         </div>
+
+        <Button
+          onClick={switchSessionType}
+          variant="outline"
+          className="border-black hover:bg-black hover:text-white bg-transparent px-8 h-10"
+        >
+          Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
+        </Button>
 
         {showSettings && (
           <Card className="p-6 border-2 border-black shadow-none rounded-none">
