@@ -668,18 +668,18 @@ export function PomodoroTimer() {
           </Button>
         </div>
 
-        <div className=" flex items-center justify-center gap-3">
+        <div className="flex items-center justify-center gap-3">
           <Button
             onClick={switchSessionType}
             variant="outline"
-            className="border-black hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
+            className="border-black hover:bg-black hover:text-white bg-transparent rounded-none font-medium"
           >
-            Switch to {currentSession?.session_type === "Work" ? "Break" : "Work"}
+            Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
           </Button>
           <Button
             onClick={leaveSession}
             variant="outline"
-            className="border-black hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
+            className="border-black hover:bg-black hover:text-white bg-transparent rounded-none font-medium"
           >
             Leave Session
           </Button>
@@ -687,67 +687,64 @@ export function PomodoroTimer() {
       </div>
 
       {showSettings && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 backdrop-blur-sm py-42">
-      
-        <Card className="relative mx-auto my-auto w-3/6 p-6 space-y-6 border-2 border-black shadow-none rounded-none">
-          <h3 className="text-lg font-bold text-black">Timer Settings</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <Card className="w-full max-w-md mx-4 p-6 space-y-6 border-2 border-black shadow-none rounded-none">
+            <h3 className="text-lg font-bold text-black">Timer Settings</h3>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="work-duration" className="text-sm font-medium text-black">
-                Work Duration (minutes)
-              </label>
-              <Input
-                id="work-duration"
-                type="number"
-                min="1"
-                max="120"
-                value={workMinutes}
-                onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                className="border-black rounded-none"
-              />
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="work-duration" className="text-sm font-medium text-black">
+                  Work Duration (minutes)
+                </label>
+                <Input
+                  id="work-duration"
+                  type="number"
+                  min="1"
+                  max="120"
+                  value={workMinutes}
+                  onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                  className="border-black rounded-none"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="break-duration" className="text-sm font-medium text-black">
+                  Break Duration (minutes)
+                </label>
+                <Input
+                  id="break-duration"
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={breakMinutes}
+                  onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                  className="border-black rounded-none"
+                />
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <label htmlFor="break-duration" className="text-sm font-medium text-black">
-                Break Duration (minutes)
-              </label>
-              <Input
-                id="break-duration"
-                type="number"
-                min="1"
-                max="60"
-                value={breakMinutes}
-                onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                className="border-black rounded-none"
-              />
+            <div className="flex gap-3">
+              <Button
+                onClick={() => setShowSettings(false)}
+                variant="outline"
+                className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
+              >
+                Cancel
+              </Button>
+              <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
+                Save Changes
+              </Button>
             </div>
-          </div>
-
-          <div className="flex gap-3">
-            <Button
-              onClick={() => setShowSettings(false)}
-              variant="outline"
-              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
-            >
-              Cancel
-            </Button>
-            <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
-              Save Changes
-            </Button>
-          </div>
-        </Card>
-      </div>
-      </div>
+          </Card>
+        </div>
       )}
 
       {participants.length > 0 && (
         <Card className="p-6 shadow-none border-none m-8">
-          <h3 className="text-sm font-medium text-black/60 rounded-8 mb-3">Participants ({participants.length})</h3>
+          <h3 className="text-sm font-medium text-black/60 mb-3">Participants ({participants.length})</h3>
           <div className="flex flex-wrap gap-2">
             {participants.map((p, i) => (
-              <div key={i} className="px-3 py-1 bg-black/5  text-sm text-black">
+              <div key={i} className="px-3 py-1 bg-black/5 text-sm text-black">
                 {p.user_name}
               </div>
             ))}
