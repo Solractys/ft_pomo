@@ -103,15 +103,24 @@ export function PomodoroTimer() {
     setSessionKey(newKey)
     setCurrentSession(data)
     setDisplayTime(data.time_remaining)
+    setWorkMinutes(Math.floor((data.work_duration || 1500) / 60))
+    setBreakMinutes(Math.floor((data.break_duration || 300) / 60))
     setFlowStep("create")
 
     const shareUrl = `${window.location.origin}?session=${newKey}`
-    await navigator.clipboard.writeText(shareUrl)
-
-    toast({
-      title: "Session Created",
-      description: "Link copied to clipboard!",
-    })
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      toast({
+        title: "Session Created",
+        description: "Link copied to clipboard!",
+      })
+    } catch (err) {
+      console.error("[v0] Failed to copy to clipboard:", err)
+      toast({
+        title: "Session Created",
+        description: `Session key: ${newKey}`,
+      })
+    }
   }
 
   const joinSession = async (reconnecting = false) => {
@@ -174,10 +183,10 @@ export function PomodoroTimer() {
     saveSessionData(session.id, session.session_key, userName.trim())
 
     setCurrentSession(session)
-    setDisplayTime(session.time_remaining)
+    setDisplayTime(session.time_remaining || 1500)
     setIsJoined(true)
-    setWorkMinutes(Math.floor(session.work_duration / 60))
-    setBreakMinutes(Math.floor(session.break_duration / 60))
+    setWorkMinutes(Math.floor((session.work_duration || 1500) / 60))
+    setBreakMinutes(Math.floor((session.break_duration || 300) / 60))
 
     if (!reconnecting) {
       toast({
@@ -197,13 +206,23 @@ export function PomodoroTimer() {
 
     isTimerController.current = true
 
-    await supabase
+    const { error } = await supabase
       .from("pomodoro_sessions")
       .update({
         state: "running",
         started_at: new Date().toISOString(),
       })
       .eq("id", currentSession.id)
+
+    if (error) {
+      console.error("[v0] Error starting timer:", error)
+      isTimerController.current = false
+      toast({
+        title: "Error",
+        description: "Failed to start timer",
+        variant: "destructive",
+      })
+    }
   }
 
   const pauseTimer = async () => {
@@ -216,24 +235,35 @@ export function PomodoroTimer() {
 
     isTimerController.current = false
 
-    await supabase
+    const { error } = await supabase
       .from("pomodoro_sessions")
       .update({
         state: "paused",
         time_remaining: timeRemaining,
       })
       .eq("id", currentSession.id)
+
+    if (error) {
+      console.error("[v0] Error pausing timer:", error)
+      toast({
+        title: "Error",
+        description: "Failed to pause timer",
+        variant: "destructive",
+      })
+    }
   }
 
   const resetTimer = async () => {
     if (!currentSession) return
 
     const resetTime =
-      (currentSession.session_type || "work") === "work" ? currentSession.work_duration : currentSession.break_duration
+      (currentSession.session_type || "work") === "work" 
+        ? (currentSession.work_duration || 1500) 
+        : (currentSession.break_duration || 300)
 
     isTimerController.current = false
 
-    await supabase
+    const { error } = await supabase
       .from("pomodoro_sessions")
       .update({
         state: "idle",
@@ -241,17 +271,28 @@ export function PomodoroTimer() {
         started_at: null,
       })
       .eq("id", currentSession.id)
+
+    if (error) {
+      console.error("[v0] Error resetting timer:", error)
+      toast({
+        title: "Error",
+        description: "Failed to reset timer",
+        variant: "destructive",
+      })
+    }
   }
 
   const switchSessionType = async () => {
     if (!currentSession) return
 
     const newType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
-    const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
+    const newTime = newType === "work" 
+      ? (currentSession.work_duration || 1500) 
+      : (currentSession.break_duration || 300)
 
     isTimerController.current = false
 
-    await supabase
+    const { error } = await supabase
       .from("pomodoro_sessions")
       .update({
         session_type: newType,
@@ -260,6 +301,16 @@ export function PomodoroTimer() {
         started_at: null,
       })
       .eq("id", currentSession.id)
+
+    if (error) {
+      console.error("[v0] Error switching session type:", error)
+      toast({
+        title: "Error",
+        description: "Failed to switch session type",
+        variant: "destructive",
+      })
+      return
+    }
 
     toast({
       title: "Session Switched",
@@ -270,10 +321,19 @@ export function PomodoroTimer() {
   const updateDurations = async () => {
     if (!currentSession) return
 
+    if (workMinutes < 1 || breakMinutes < 1) {
+      toast({
+        title: "Invalid Duration",
+        description: "Duration must be at least 1 minute",
+        variant: "destructive",
+      })
+      return
+    }
+
     const newWorkDuration = workMinutes * 60
     const newBreakDuration = breakMinutes * 60
 
-    await supabase
+    const { error } = await supabase
       .from("pomodoro_sessions")
       .update({
         work_duration: newWorkDuration,
@@ -286,6 +346,16 @@ export function PomodoroTimer() {
             : currentSession.time_remaining,
       })
       .eq("id", currentSession.id)
+
+    if (error) {
+      console.error("[v0] Error updating durations:", error)
+      toast({
+        title: "Error",
+        description: "Failed to update durations",
+        variant: "destructive",
+      })
+      return
+    }
 
     setShowSettings(false)
     toast({
@@ -361,7 +431,9 @@ export function PomodoroTimer() {
         }
 
         const nextType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
-        const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
+        const nextTime = nextType === "work" 
+          ? (currentSession.work_duration || 1500) 
+          : (currentSession.break_duration || 300)
 
         await supabase
           .from("pomodoro_sessions")
@@ -459,6 +531,7 @@ export function PomodoroTimer() {
       setSessionKey(urlSessionKey)
       setFlowStep("join")
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (!isJoined && flowStep === "choice") {
@@ -574,8 +647,17 @@ export function PomodoroTimer() {
               <Button
                 onClick={async () => {
                   const shareUrl = `${window.location.origin}?session=${sessionKey}`
-                  await navigator.clipboard.writeText(shareUrl)
-                  toast({ title: "Copied!", description: "Link copied to clipboard" })
+                  try {
+                    await navigator.clipboard.writeText(shareUrl)
+                    toast({ title: "Copied!", description: "Link copied to clipboard" })
+                  } catch (err) {
+                    console.error("[v0] Failed to copy:", err)
+                    toast({ 
+                      title: "Copy Failed", 
+                      description: "Please copy manually: " + sessionKey,
+                      variant: "destructive"
+                    })
+                  }
                 }}
                 variant="ghost"
                 size="icon"
