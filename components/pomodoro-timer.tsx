@@ -57,12 +57,47 @@ export function PomodoroTimer() {
   const { toast } = useToast()
   const supabase = createClient()
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
   const isTimerController = useRef(false)
+  const notificationPlayedRef = useRef<string | null>(null)
 
   useEffect(() => {
-    audioRef.current = new Audio("/notification.mp3")
+    if (typeof window !== "undefined") {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+    }
+
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+      }
+    }
   }, [])
+
+  const playNotificationSound = () => {
+    if (!audioContextRef.current) return
+
+    try {
+      const ctx = audioContextRef.current
+      const oscillator = ctx.createOscillator()
+      const gainNode = ctx.createGain()
+
+      oscillator.connect(gainNode)
+      gainNode.connect(ctx.destination)
+
+      oscillator.frequency.setValueAtTime(800, ctx.currentTime)
+      oscillator.frequency.setValueAtTime(600, ctx.currentTime + 0.1)
+
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3)
+
+      oscillator.start(ctx.currentTime)
+      oscillator.stop(ctx.currentTime + 0.3)
+
+      console.log("[v0] Notification sound played")
+    } catch (err) {
+      console.error("[v0] Audio play failed:", err)
+    }
+  }
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -353,36 +388,36 @@ export function PomodoroTimer() {
 
       setDisplayTime(timeRemaining)
 
-      if (timeRemaining <= 0 && isTimerController.current) {
-        clearInterval(timerRef.current!)
-        isTimerController.current = false
+      if (timeRemaining <= 0) {
+        const sessionStateKey = `${currentSession.id}-${currentSession.session_type}-${currentSession.started_at}`
 
-        if (audioRef.current) {
-          try {
-            audioRef.current.currentTime = 0
-            await audioRef.current.play()
-          } catch (err) {
-            console.error("[v0] Audio play failed:", err)
-          }
+        if (notificationPlayedRef.current !== sessionStateKey) {
+          notificationPlayedRef.current = sessionStateKey
+          playNotificationSound()
         }
 
-        const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
-        const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
+        if (isTimerController.current) {
+          clearInterval(timerRef.current!)
+          isTimerController.current = false
 
-        await supabase
-          .from("pomodoro_sessions")
-          .update({
-            state: "idle",
-            time_remaining: nextTime,
-            session_type: nextType,
-            started_at: null,
+          const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+          const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
+
+          await supabase
+            .from("pomodoro_sessions")
+            .update({
+              state: "idle",
+              time_remaining: nextTime,
+              session_type: nextType,
+              started_at: null,
+            })
+            .eq("id", currentSession.id)
+
+          toast({
+            title: "Time's Up!",
+            description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
           })
-          .eq("id", currentSession.id)
-
-        toast({
-          title: "Time's Up!",
-          description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
-        })
+        }
       }
     }, 100)
 
@@ -623,8 +658,6 @@ export function PomodoroTimer() {
 
   return (
     <div className="min-h-screen bg-white text-black flex flex-col items-center justify-center p-4">
-      
-
       <div className="absolute top-6 right-6 flex items-center gap-4">
         <div className="text-right">
           <p className="text-xs text-black/60">Session Key</p>
@@ -694,7 +727,7 @@ export function PomodoroTimer() {
           Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
         </Button>
       </div>
-        <div className="top-4 m-4 right-4 flex gap-2">
+      <div className="top-4 m-4 right-4 flex gap-2">
         <Button
           variant="outline"
           size="icon"
@@ -714,59 +747,58 @@ export function PomodoroTimer() {
       </div>
 
       {showSettings && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <div className="absolute inset-0 py-13 bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 py-13 bg-black/50 backdrop-blur-sm">
+            <Card className="relative w-3/6 m-auto p-6 space-y-6 border-none shadow-none rounded-8">
+              <h3 className="text-lg font-bold text-black">Timer Settings</h3>
 
-        <Card className="relative w-3/6 m-auto p-6 space-y-6 border-none shadow-none rounded-8">
-          <h3 className="text-lg font-bold text-black">Timer Settings</h3>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label htmlFor="work-duration" className="text-sm font-medium text-black">
+                    Work Duration (minutes)
+                  </label>
+                  <Input
+                    id="work-duration"
+                    type="number"
+                    min="1"
+                    max="120"
+                    value={workMinutes}
+                    onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                    className="border-black rounded-none"
+                  />
+                </div>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="work-duration" className="text-sm font-medium text-black">
-                Work Duration (minutes)
-              </label>
-              <Input
-                id="work-duration"
-                type="number"
-                min="1"
-                max="120"
-                value={workMinutes}
-                onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                className="border-black rounded-none"
-              />
-            </div>
+                <div className="space-y-2">
+                  <label htmlFor="break-duration" className="text-sm font-medium text-black">
+                    Break Duration (minutes)
+                  </label>
+                  <Input
+                    id="break-duration"
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={breakMinutes}
+                    onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                    className="border-black rounded-none"
+                  />
+                </div>
+              </div>
 
-            <div className="space-y-2">
-              <label htmlFor="break-duration" className="text-sm font-medium text-black">
-                Break Duration (minutes)
-              </label>
-              <Input
-                id="break-duration"
-                type="number"
-                min="1"
-                max="60"
-                value={breakMinutes}
-                onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                className="border-black rounded-none"
-              />
-            </div>
+              <div className="flex gap-3">
+                <Button
+                  onClick={() => setShowSettings(false)}
+                  variant="outline"
+                  className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
+                >
+                  Cancel
+                </Button>
+                <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
+                  Save Changes
+                </Button>
+              </div>
+            </Card>
           </div>
-
-          <div className="flex gap-3">
-            <Button
-              onClick={() => setShowSettings(false)}
-              variant="outline"
-              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
-            >
-              Cancel
-            </Button>
-            <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
-              Save Changes
-            </Button>
-          </div>
-        </Card>
         </div>
-          </div>
       )}
 
       {participants.length > 0 && (
