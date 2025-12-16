@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Copy, Play, Pause, RotateCcw, Settings, Check } from "lucide-react"
+import { Copy, Play, Pause, RotateCcw, Settings, Check, LogOut } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
 type SessionState = "idle" | "running" | "paused"
@@ -103,24 +103,15 @@ export function PomodoroTimer() {
     setSessionKey(newKey)
     setCurrentSession(data)
     setDisplayTime(data.time_remaining)
-    setWorkMinutes(Math.floor((data.work_duration || 1500) / 60))
-    setBreakMinutes(Math.floor((data.break_duration || 300) / 60))
     setFlowStep("create")
 
     const shareUrl = `${window.location.origin}?session=${newKey}`
-    try {
-      await navigator.clipboard.writeText(shareUrl)
-      toast({
-        title: "Session Created",
-        description: "Link copied to clipboard!",
-      })
-    } catch (err) {
-      console.error("[v0] Failed to copy to clipboard:", err)
-      toast({
-        title: "Session Created",
-        description: `Session key: ${newKey}`,
-      })
-    }
+    await navigator.clipboard.writeText(shareUrl)
+
+    toast({
+      title: "Session Created",
+      description: "Link copied to clipboard!",
+    })
   }
 
   const joinSession = async (reconnecting = false) => {
@@ -133,28 +124,34 @@ export function PomodoroTimer() {
       return
     }
 
-    const { data: session, error: sessionError } = await supabase
-      .from("pomodoro_sessions")
-      .select("*")
-      .eq("session_key", sessionKey.toUpperCase())
-      .single()
+    let session = currentSession
 
-    if (sessionError || !session) {
-      if (reconnecting) {
-        clearSessionData()
+    if (!session || session.session_key !== sessionKey.toUpperCase()) {
+      const { data: fetchedSession, error: sessionError } = await supabase
+        .from("pomodoro_sessions")
+        .select("*")
+        .eq("session_key", sessionKey.toUpperCase())
+        .single()
+
+      if (sessionError || !fetchedSession) {
+        if (reconnecting) {
+          clearSessionData()
+          toast({
+            title: "Session Ended",
+            description: "The session is no longer available",
+            variant: "destructive",
+          })
+          return
+        }
         toast({
-          title: "Session Ended",
-          description: "The session is no longer available",
+          title: "Session Not Found",
+          description: "Please check the session key and try again",
           variant: "destructive",
         })
         return
       }
-      toast({
-        title: "Session Not Found",
-        description: "Please check the session key and try again",
-        variant: "destructive",
-      })
-      return
+
+      session = fetchedSession
     }
 
     const { data: existingParticipants } = await supabase
@@ -170,7 +167,7 @@ export function PomodoroTimer() {
       })
 
       if (participantError) {
-        console.error("[v0] Error joining session:", participantError)
+        console.error("Error joining session:", participantError)
         toast({
           title: "Error",
           description: "Failed to join session",
@@ -183,10 +180,10 @@ export function PomodoroTimer() {
     saveSessionData(session.id, session.session_key, userName.trim())
 
     setCurrentSession(session)
-    setDisplayTime(session.time_remaining || 1500)
+    setDisplayTime(session.time_remaining)
     setIsJoined(true)
-    setWorkMinutes(Math.floor((session.work_duration || 1500) / 60))
-    setBreakMinutes(Math.floor((session.break_duration || 300) / 60))
+    setWorkMinutes(Math.floor(session.work_duration / 60))
+    setBreakMinutes(Math.floor(session.break_duration / 60))
 
     if (!reconnecting) {
       toast({
@@ -196,7 +193,7 @@ export function PomodoroTimer() {
     } else {
       toast({
         title: "Reconnected",
-        description: "You've been reconnected to your session",
+        description: `Welcome back, ${userName}!`,
       })
     }
   }
@@ -206,23 +203,13 @@ export function PomodoroTimer() {
 
     isTimerController.current = true
 
-    const { error } = await supabase
+    await supabase
       .from("pomodoro_sessions")
       .update({
         state: "running",
         started_at: new Date().toISOString(),
       })
       .eq("id", currentSession.id)
-
-    if (error) {
-      console.error("[v0] Error starting timer:", error)
-      isTimerController.current = false
-      toast({
-        title: "Error",
-        description: "Failed to start timer",
-        variant: "destructive",
-      })
-    }
   }
 
   const pauseTimer = async () => {
@@ -235,35 +222,24 @@ export function PomodoroTimer() {
 
     isTimerController.current = false
 
-    const { error } = await supabase
+    await supabase
       .from("pomodoro_sessions")
       .update({
         state: "paused",
         time_remaining: timeRemaining,
       })
       .eq("id", currentSession.id)
-
-    if (error) {
-      console.error("[v0] Error pausing timer:", error)
-      toast({
-        title: "Error",
-        description: "Failed to pause timer",
-        variant: "destructive",
-      })
-    }
   }
 
   const resetTimer = async () => {
     if (!currentSession) return
 
     const resetTime =
-      (currentSession.session_type || "work") === "work" 
-        ? (currentSession.work_duration || 1500) 
-        : (currentSession.break_duration || 300)
+      currentSession.session_type === "work" ? currentSession.work_duration : currentSession.break_duration
 
     isTimerController.current = false
 
-    const { error } = await supabase
+    await supabase
       .from("pomodoro_sessions")
       .update({
         state: "idle",
@@ -271,28 +247,17 @@ export function PomodoroTimer() {
         started_at: null,
       })
       .eq("id", currentSession.id)
-
-    if (error) {
-      console.error("[v0] Error resetting timer:", error)
-      toast({
-        title: "Error",
-        description: "Failed to reset timer",
-        variant: "destructive",
-      })
-    }
   }
 
   const switchSessionType = async () => {
     if (!currentSession) return
 
-    const newType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
-    const newTime = newType === "work" 
-      ? (currentSession.work_duration || 1500) 
-      : (currentSession.break_duration || 300)
+    const newType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+    const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
 
     isTimerController.current = false
 
-    const { error } = await supabase
+    await supabase
       .from("pomodoro_sessions")
       .update({
         session_type: newType,
@@ -301,16 +266,6 @@ export function PomodoroTimer() {
         started_at: null,
       })
       .eq("id", currentSession.id)
-
-    if (error) {
-      console.error("[v0] Error switching session type:", error)
-      toast({
-        title: "Error",
-        description: "Failed to switch session type",
-        variant: "destructive",
-      })
-      return
-    }
 
     toast({
       title: "Session Switched",
@@ -321,41 +276,22 @@ export function PomodoroTimer() {
   const updateDurations = async () => {
     if (!currentSession) return
 
-    if (workMinutes < 1 || breakMinutes < 1) {
-      toast({
-        title: "Invalid Duration",
-        description: "Duration must be at least 1 minute",
-        variant: "destructive",
-      })
-      return
-    }
-
     const newWorkDuration = workMinutes * 60
     const newBreakDuration = breakMinutes * 60
 
-    const { error } = await supabase
+    await supabase
       .from("pomodoro_sessions")
       .update({
         work_duration: newWorkDuration,
         break_duration: newBreakDuration,
         time_remaining:
           currentSession.state === "idle"
-            ? (currentSession.session_type || "work") === "work"
+            ? currentSession.session_type === "work"
               ? newWorkDuration
               : newBreakDuration
             : currentSession.time_remaining,
       })
       .eq("id", currentSession.id)
-
-    if (error) {
-      console.error("[v0] Error updating durations:", error)
-      toast({
-        title: "Error",
-        description: "Failed to update durations",
-        variant: "destructive",
-      })
-      return
-    }
 
     setShowSettings(false)
     toast({
@@ -430,10 +366,8 @@ export function PomodoroTimer() {
           }
         }
 
-        const nextType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
-        const nextTime = nextType === "work" 
-          ? (currentSession.work_duration || 1500) 
-          : (currentSession.break_duration || 300)
+        const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+        const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
 
         await supabase
           .from("pomodoro_sessions")
@@ -447,7 +381,7 @@ export function PomodoroTimer() {
 
         toast({
           title: "Time's Up!",
-          description: (currentSession.session_type || "work") === "work" ? "Time for a break!" : "Back to work!",
+          description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
         })
       }
     }, 100)
@@ -531,7 +465,6 @@ export function PomodoroTimer() {
       setSessionKey(urlSessionKey)
       setFlowStep("join")
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (!isJoined && flowStep === "choice") {
@@ -647,17 +580,8 @@ export function PomodoroTimer() {
               <Button
                 onClick={async () => {
                   const shareUrl = `${window.location.origin}?session=${sessionKey}`
-                  try {
-                    await navigator.clipboard.writeText(shareUrl)
-                    toast({ title: "Copied!", description: "Link copied to clipboard" })
-                  } catch (err) {
-                    console.error("[v0] Failed to copy:", err)
-                    toast({ 
-                      title: "Copy Failed", 
-                      description: "Please copy manually: " + sessionKey,
-                      variant: "destructive"
-                    })
-                  }
+                  await navigator.clipboard.writeText(shareUrl)
+                  toast({ title: "Copied!", description: "Link copied to clipboard" })
                 }}
                 variant="ghost"
                 size="icon"
@@ -699,15 +623,27 @@ export function PomodoroTimer() {
 
   return (
     <div className="min-h-screen bg-white text-black flex flex-col items-center justify-center p-4">
-      <div className="fixed top-4 right-4">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => setShowSettings(!showSettings)}
-          className="border-2 border-black hover:bg-black hover:text-white transition-colors"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
+      
+
+      <div className="absolute top-6 right-6 flex items-center gap-4">
+        <div className="text-right">
+          <p className="text-xs text-black/60">Session Key</p>
+          <div className="flex items-center gap-2">
+            <code className="text-sm font-mono font-bold text-black">{currentSession?.session_key}</code>
+            <Button
+              onClick={async () => {
+                const shareUrl = `${window.location.origin}?session=${currentSession?.session_key}`
+                await navigator.clipboard.writeText(shareUrl)
+                toast({ title: "Copied!", description: "Link copied to clipboard" })
+              }}
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 hover:bg-black/10"
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
       </div>
 
       <div className="text-center space-y-12">
@@ -717,7 +653,7 @@ export function PomodoroTimer() {
           </h1>
 
           <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
-            {currentSession?.session_type?.replace("_", " ") || "work"}
+            {currentSession?.session_type.replace("_", " ")}
           </p>
         </div>
 
@@ -750,80 +686,91 @@ export function PomodoroTimer() {
           </Button>
         </div>
 
-        <div className="flex items-center justify-center gap-3">
-          <Button
-            onClick={switchSessionType}
-            variant="outline"
-            className="border-black hover:bg-black hover:text-white bg-transparent rounded-none font-medium"
-          >
-            Switch to {(currentSession?.session_type || "work") === "work" ? "Break" : "Work"}
-          </Button>
-          <Button
-            onClick={leaveSession}
-            variant="outline"
-            className="border-black hover:bg-black hover:text-white bg-transparent rounded-none font-medium"
-          >
-            Leave Session
-          </Button>
-        </div>
+        <Button
+          onClick={switchSessionType}
+          variant="outline"
+          className="border-black border-2 hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
+        >
+          Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
+        </Button>
+      </div>
+        <div className="top-4 m-4 right-4 flex gap-2">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setShowSettings(!showSettings)}
+          className="border-2 border-black hover:bg-black hover:text-white transition-colors"
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={leaveSession}
+          className="border-2 border-black hover:bg-black hover:text-white transition-colors bg-transparent"
+        >
+          <LogOut className="h-4 w-4" />
+        </Button>
       </div>
 
       {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
-          <Card className="w-full max-w-md mx-4 p-6 space-y-6 border-2 border-black shadow-none rounded-none">
-            <h3 className="text-lg font-bold text-black">Timer Settings</h3>
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 py-13 bg-black/50 backdrop-blur-sm">
 
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label htmlFor="work-duration" className="text-sm font-medium text-black">
-                  Work Duration (minutes)
-                </label>
-                <Input
-                  id="work-duration"
-                  type="number"
-                  min="1"
-                  max="120"
-                  value={workMinutes}
-                  onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                  className="border-black rounded-none"
-                />
-              </div>
+        <Card className="relative w-3/6 m-auto p-6 space-y-6 border-none shadow-none rounded-8">
+          <h3 className="text-lg font-bold text-black">Timer Settings</h3>
 
-              <div className="space-y-2">
-                <label htmlFor="break-duration" className="text-sm font-medium text-black">
-                  Break Duration (minutes)
-                </label>
-                <Input
-                  id="break-duration"
-                  type="number"
-                  min="1"
-                  max="60"
-                  value={breakMinutes}
-                  onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                  className="border-black rounded-none"
-                />
-              </div>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="work-duration" className="text-sm font-medium text-black">
+                Work Duration (minutes)
+              </label>
+              <Input
+                id="work-duration"
+                type="number"
+                min="1"
+                max="120"
+                value={workMinutes}
+                onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                className="border-black rounded-none"
+              />
             </div>
 
-            <div className="flex gap-3">
-              <Button
-                onClick={() => setShowSettings(false)}
-                variant="outline"
-                className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
-              >
-                Cancel
-              </Button>
-              <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
-                Save Changes
-              </Button>
+            <div className="space-y-2">
+              <label htmlFor="break-duration" className="text-sm font-medium text-black">
+                Break Duration (minutes)
+              </label>
+              <Input
+                id="break-duration"
+                type="number"
+                min="1"
+                max="60"
+                value={breakMinutes}
+                onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                className="border-black rounded-none"
+              />
             </div>
-            <div className=" m-auto">Code session:<b>{sessionKey}</b></div>
-          </Card>
+          </div>
+
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setShowSettings(false)}
+              variant="outline"
+              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
+            >
+              Cancel
+            </Button>
+            <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
+              Save Changes
+            </Button>
+          </div>
+        </Card>
         </div>
+          </div>
       )}
 
       {participants.length > 0 && (
-        <Card className="p-6 shadow-none border-none m-8">
+        <Card className="p-6 border-none shadow-none">
           <h3 className="text-sm font-medium text-black/60 mb-3">Participants ({participants.length})</h3>
           <div className="flex flex-wrap gap-2">
             {participants.map((p, i) => (
