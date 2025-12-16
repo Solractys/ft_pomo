@@ -5,11 +5,12 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Copy, Play, Pause, RotateCcw, Plus, Settings } from "lucide-react"
+import { Copy, Play, Pause, RotateCcw, Settings, Check } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
 type SessionState = "idle" | "running" | "paused"
 type SessionType = "work" | "break" | "long_break"
+type FlowStep = "choice" | "join" | "create"
 
 interface PomodoroSession {
   id: string
@@ -27,14 +28,27 @@ interface SessionParticipant {
   user_name: string
 }
 
-const WORK_TIME = 25 * 60 // 25 minutes
-const BREAK_TIME = 5 * 60 // 5 minutes
-const LONG_BREAK_TIME = 15 * 60 // 15 minutes
+const STORAGE_KEY = "pomodoro_session_data"
+
+const saveSessionData = (sessionId: string, sessionKey: string, userName: string) => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId, sessionKey, userName }))
+}
+
+const getSessionData = () => {
+  const data = localStorage.getItem(STORAGE_KEY)
+  return data ? JSON.parse(data) : null
+}
+
+const clearSessionData = () => {
+  localStorage.removeItem(STORAGE_KEY)
+}
 
 export function PomodoroTimer() {
+  const [flowStep, setFlowStep] = useState<FlowStep>("choice")
   const [sessionKey, setSessionKey] = useState("")
   const [userName, setUserName] = useState("")
   const [currentSession, setCurrentSession] = useState<PomodoroSession | null>(null)
+  const [displayTime, setDisplayTime] = useState<number>(0)
   const [participants, setParticipants] = useState<SessionParticipant[]>([])
   const [isJoined, setIsJoined] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -44,6 +58,7 @@ export function PomodoroTimer() {
   const supabase = createClient()
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const isTimerController = useRef(false)
 
   useEffect(() => {
     audioRef.current = new Audio("/notification.mp3")
@@ -85,6 +100,11 @@ export function PomodoroTimer() {
       return
     }
 
+    setSessionKey(newKey)
+    setCurrentSession(data)
+    setDisplayTime(data.time_remaining)
+    setFlowStep("create")
+
     const shareUrl = `${window.location.origin}?session=${newKey}`
     await navigator.clipboard.writeText(shareUrl)
 
@@ -92,11 +112,9 @@ export function PomodoroTimer() {
       title: "Session Created",
       description: "Link copied to clipboard!",
     })
-
-    setSessionKey(newKey)
   }
 
-  const joinSession = async () => {
+  const joinSession = async (reconnecting = false) => {
     if (!sessionKey.trim() || !userName.trim()) {
       toast({
         title: "Missing Information",
@@ -113,6 +131,15 @@ export function PomodoroTimer() {
       .single()
 
     if (sessionError || !session) {
+      if (reconnecting) {
+        clearSessionData()
+        toast({
+          title: "Session Ended",
+          description: "The session is no longer available",
+          variant: "destructive",
+        })
+        return
+      }
       toast({
         title: "Session Not Found",
         description: "Please check the session key and try again",
@@ -121,34 +148,54 @@ export function PomodoroTimer() {
       return
     }
 
-    const { error: participantError } = await supabase.from("session_participants").insert({
-      session_id: session.id,
-      user_name: userName.trim(),
-    })
+    const { data: existingParticipants } = await supabase
+      .from("session_participants")
+      .select("user_name")
+      .eq("session_id", session.id)
+      .eq("user_name", userName.trim())
 
-    if (participantError) {
-      console.error("[v0] Error joining session:", participantError)
-      toast({
-        title: "Error",
-        description: "Failed to join session",
-        variant: "destructive",
+    if (!existingParticipants || existingParticipants.length === 0) {
+      const { error: participantError } = await supabase.from("session_participants").insert({
+        session_id: session.id,
+        user_name: userName.trim(),
       })
-      return
+
+      if (participantError) {
+        console.error("[v0] Error joining session:", participantError)
+        toast({
+          title: "Error",
+          description: "Failed to join session",
+          variant: "destructive",
+        })
+        return
+      }
     }
 
+    saveSessionData(session.id, session.session_key, userName.trim())
+
     setCurrentSession(session)
+    setDisplayTime(session.time_remaining)
     setIsJoined(true)
     setWorkMinutes(Math.floor(session.work_duration / 60))
     setBreakMinutes(Math.floor(session.break_duration / 60))
 
-    toast({
-      title: "Joined Session",
-      description: `Welcome, ${userName}!`,
-    })
+    if (!reconnecting) {
+      toast({
+        title: "Joined Session",
+        description: `Welcome, ${userName}!`,
+      })
+    } else {
+      toast({
+        title: "Reconnected",
+        description: "You've been reconnected to your session",
+      })
+    }
   }
 
   const startTimer = async () => {
     if (!currentSession) return
+
+    isTimerController.current = true
 
     await supabase
       .from("pomodoro_sessions")
@@ -162,7 +209,20 @@ export function PomodoroTimer() {
   const pauseTimer = async () => {
     if (!currentSession) return
 
-    await supabase.from("pomodoro_sessions").update({ state: "paused" }).eq("id", currentSession.id)
+    const elapsed = currentSession.started_at
+      ? Math.floor((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
+      : 0
+    const timeRemaining = Math.max(0, currentSession.time_remaining - elapsed)
+
+    isTimerController.current = false
+
+    await supabase
+      .from("pomodoro_sessions")
+      .update({
+        state: "paused",
+        time_remaining: timeRemaining,
+      })
+      .eq("id", currentSession.id)
   }
 
   const resetTimer = async () => {
@@ -170,6 +230,8 @@ export function PomodoroTimer() {
 
     const resetTime =
       currentSession.session_type === "work" ? currentSession.work_duration : currentSession.break_duration
+
+    isTimerController.current = false
 
     await supabase
       .from("pomodoro_sessions")
@@ -186,6 +248,8 @@ export function PomodoroTimer() {
 
     const newType: SessionType = currentSession.session_type === "work" ? "break" : "work"
     const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
+
+    isTimerController.current = false
 
     await supabase
       .from("pomodoro_sessions")
@@ -230,18 +294,62 @@ export function PomodoroTimer() {
     })
   }
 
+  const leaveSession = async () => {
+    if (!currentSession || !userName) return
+
+    const { error: participantError } = await supabase
+      .from("session_participants")
+      .delete()
+      .eq("session_id", currentSession.id)
+      .eq("user_name", userName)
+
+    if (participantError) {
+      console.error("[v0] Error leaving session:", participantError)
+      toast({
+        title: "Error",
+        description: "Failed to leave session",
+        variant: "destructive",
+      })
+      return
+    }
+
+    clearSessionData()
+    setCurrentSession(null)
+    setIsJoined(false)
+    setFlowStep("choice")
+    setSessionKey("")
+    setUserName("")
+    setParticipants([])
+
+    toast({
+      title: "Left Session",
+      description: "You have left the Pomodoro session",
+    })
+  }
+
   useEffect(() => {
     if (!currentSession || currentSession.state !== "running") {
       if (timerRef.current) {
         clearInterval(timerRef.current)
         timerRef.current = null
       }
+      setDisplayTime(currentSession?.time_remaining || 0)
       return
     }
 
+    const updateInterval = isTimerController.current ? 1000 : null
+
     timerRef.current = setInterval(async () => {
-      if (currentSession.time_remaining <= 1) {
+      if (!currentSession.started_at) return
+
+      const elapsed = Math.floor((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
+      const timeRemaining = Math.max(0, currentSession.time_remaining - elapsed)
+
+      setDisplayTime(timeRemaining)
+
+      if (timeRemaining <= 0 && isTimerController.current) {
         clearInterval(timerRef.current!)
+        isTimerController.current = false
 
         if (audioRef.current) {
           try {
@@ -261,6 +369,7 @@ export function PomodoroTimer() {
             state: "idle",
             time_remaining: nextTime,
             session_type: nextType,
+            started_at: null,
           })
           .eq("id", currentSession.id)
 
@@ -268,15 +377,8 @@ export function PomodoroTimer() {
           title: "Time's Up!",
           description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
         })
-      } else {
-        await supabase
-          .from("pomodoro_sessions")
-          .update({
-            time_remaining: currentSession.time_remaining - 1,
-          })
-          .eq("id", currentSession.id)
       }
-    }, 1000)
+    }, 100)
 
     return () => {
       if (timerRef.current) {
@@ -299,9 +401,13 @@ export function PomodoroTimer() {
           filter: `id=eq.${currentSession.id}`,
         },
         (payload) => {
-          console.log("[v0] Session update:", payload)
           if (payload.new) {
-            setCurrentSession(payload.new as PomodoroSession)
+            const newSession = payload.new as PomodoroSession
+            setCurrentSession(newSession)
+
+            if (newSession.state !== "running") {
+              setDisplayTime(newSession.time_remaining)
+            }
           }
         },
       )
@@ -342,28 +448,54 @@ export function PomodoroTimer() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const urlSessionKey = params.get("session")
-    if (urlSessionKey) {
+
+    const savedData = getSessionData()
+
+    if (savedData) {
+      setSessionKey(savedData.sessionKey)
+      setUserName(savedData.userName)
+      joinSession(true)
+    } else if (urlSessionKey) {
       setSessionKey(urlSessionKey)
+      setFlowStep("join")
     }
   }, [])
 
-  if (!isJoined) {
+  if (!isJoined && flowStep === "choice") {
     return (
       <div className="w-full max-w-md space-y-8">
-        <div className="absolute top-6 right-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-6xl font-bold tracking-tight text-black">FT_POMODORO</h1>
+          <p className="text-sm text-black/60">Synchronized timer sessions. Work together :D.</p>
+          <i>by csilva-s</i>
+        </div>
+
+        <Card className="p-8 space-y-4 border-2 border-black shadow-none rounded-none">
+          <Button
+            onClick={() => setFlowStep("join")}
+            className="w-full bg-black text-white hover:bg-black/90 rounded-none h-14 font-medium text-lg"
+          >
+            Join Session
+          </Button>
+
           <Button
             onClick={createNewSession}
             variant="outline"
-            className="gap-2 border-black hover:bg-black hover:text-white bg-transparent"
+            className="w-full border-2 border-black hover:bg-black hover:text-white bg-transparent rounded-none h-14 font-medium text-lg"
           >
-            <Plus className="h-4 w-4" />
-            Create Session
+            Create New Session
           </Button>
-        </div>
+        </Card>
+      </div>
+    )
+  }
 
+  if (!isJoined && flowStep === "join") {
+    return (
+      <div className="w-full max-w-md space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold tracking-tight text-black">POMODORO</h1>
-          <p className="text-sm text-black/60">Synchronized timer sessions</p>
+          <h1 className="text-4xl font-bold tracking-tight text-black">JOIN SESSION</h1>
+          <p className="text-sm text-black/60">Enter your details to join</p>
         </div>
 
         <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
@@ -375,6 +507,11 @@ export function PomodoroTimer() {
               id="session-key"
               value={sessionKey}
               onChange={(e) => setSessionKey(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  joinSession(false)
+                }
+              }}
               placeholder="Enter session key"
               className="border-black rounded-none text-black placeholder:text-black/40"
               maxLength={6}
@@ -389,16 +526,89 @@ export function PomodoroTimer() {
               id="user-name"
               value={userName}
               onChange={(e) => setUserName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  joinSession(false)
+                }
+              }}
+              placeholder="Enter your name"
+              className="border-black rounded-none text-black placeholder:text-black/40"
+            />
+          </div>
+
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setFlowStep("choice")}
+              variant="outline"
+              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none h-12 font-medium"
+            >
+              Back
+            </Button>
+            <Button
+              onClick={() => joinSession(false)}
+              className="flex-1 bg-black text-white hover:bg-black/90 rounded-none h-12 font-medium"
+            >
+              Join
+            </Button>
+          </div>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!isJoined && flowStep === "create") {
+    return (
+      <div className="w-full max-w-md space-y-8">
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl font-bold tracking-tight text-black">SESSION CREATED</h1>
+          <p className="text-sm text-black/60">Share this key with participants</p>
+        </div>
+
+        <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-black">Session Key</label>
+            <div className="flex items-center gap-2 p-4 border-2 border-black bg-black/5">
+              <code className="text-2xl font-mono font-bold text-black tracking-wider flex-1 text-center">
+                {sessionKey}
+              </code>
+              <Button
+                onClick={async () => {
+                  const shareUrl = `${window.location.origin}?session=${sessionKey}`
+                  await navigator.clipboard.writeText(shareUrl)
+                  toast({ title: "Copied!", description: "Link copied to clipboard" })
+                }}
+                variant="ghost"
+                size="icon"
+                className="hover:bg-black/10"
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="creator-name" className="text-sm font-medium text-black">
+              Your Name
+            </label>
+            <Input
+              id="creator-name"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  joinSession(false)
+                }
+              }}
               placeholder="Enter your name"
               className="border-black rounded-none text-black placeholder:text-black/40"
             />
           </div>
 
           <Button
-            onClick={joinSession}
+            onClick={() => joinSession(false)}
             className="w-full bg-black text-white hover:bg-black/90 rounded-none h-12 font-medium"
           >
-            Join Session
+            Start Session
           </Button>
         </Card>
       </div>
@@ -406,32 +616,22 @@ export function PomodoroTimer() {
   }
 
   return (
-    <div className="w-full max-w-2xl space-y-8">
-      <div className="absolute top-6 right-6 flex items-center gap-4">
-        <div className="text-right">
-          <p className="text-xs text-black/60">Session Key</p>
-          <div className="flex items-center gap-2">
-            <code className="text-sm font-mono font-bold text-black">{currentSession?.session_key}</code>
-            <Button
-              onClick={async () => {
-                const shareUrl = `${window.location.origin}?session=${currentSession?.session_key}`
-                await navigator.clipboard.writeText(shareUrl)
-                toast({ title: "Copied!", description: "Link copied to clipboard" })
-              }}
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 hover:bg-black/10"
-            >
-              <Copy className="h-3 w-3" />
-            </Button>
-          </div>
-        </div>
+    <div className="min-h-screen bg-white text-black flex flex-col items-center justify-center p-4">
+      <div className="fixed top-4 right-4">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setShowSettings(!showSettings)}
+          className="border-2 border-black hover:bg-black hover:text-white transition-colors"
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
       </div>
 
       <div className="text-center space-y-12">
         <div className="space-y-4">
           <h1 className="text-9xl font-bold font-mono tracking-tighter text-black tabular-nums">
-            {formatTime(currentSession?.time_remaining || 0)}
+            {formatTime(displayTime)}
           </h1>
 
           <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
@@ -460,82 +660,100 @@ export function PomodoroTimer() {
           </Button>
 
           <Button
-            onClick={() => setShowSettings(!showSettings)}
-            size="lg"
+            onClick={switchSessionType}
             variant="outline"
             className="h-16 w-16 rounded-full border-2 border-black hover:bg-black hover:text-white p-0 bg-transparent"
           >
-            <Settings className="h-5 w-5" />
+            <Check className="h-5 w-5" />
           </Button>
         </div>
 
-        <Button
-          onClick={switchSessionType}
-          variant="outline"
-          className="border-black hover:bg-black hover:text-white bg-transparent px-8 h-10"
-        >
-          Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
-        </Button>
+        <div className=" flex items-center justify-center gap-3">
+          <Button
+            onClick={switchSessionType}
+            variant="outline"
+            className="border-black hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
+          >
+            Switch to {currentSession?.session_type === "Work" ? "Break" : "Work"}
+          </Button>
+          <Button
+            onClick={leaveSession}
+            variant="outline"
+            className="border-black hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
+          >
+            Leave Session
+          </Button>
+        </div>
+      </div>
 
-        {showSettings && (
-          <Card className="p-6 border-2 border-black shadow-none rounded-none">
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-black">Timer Settings</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label htmlFor="work-minutes-update" className="text-xs text-black/60">
-                    Work Duration (minutes)
-                  </label>
-                  <Input
-                    id="work-minutes-update"
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={workMinutes}
-                    onChange={(e) => setWorkMinutes(Number.parseInt(e.target.value) || 25)}
-                    className="border-black rounded-none text-black"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="break-minutes-update" className="text-xs text-black/60">
-                    Break Duration (minutes)
-                  </label>
-                  <Input
-                    id="break-minutes-update"
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={breakMinutes}
-                    onChange={(e) => setBreakMinutes(Number.parseInt(e.target.value) || 5)}
-                    className="border-black rounded-none text-black"
-                  />
-                </div>
-              </div>
-              <Button
-                onClick={updateDurations}
-                className="w-full bg-black text-white hover:bg-black/90 rounded-none h-10 font-medium"
-              >
-                Update Durations
-              </Button>
+      {showSettings && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 backdrop-blur-sm py-42">
+      
+        <Card className="relative mx-auto my-auto w-3/6 p-6 space-y-6 border-2 border-black shadow-none rounded-none">
+          <h3 className="text-lg font-bold text-black">Timer Settings</h3>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="work-duration" className="text-sm font-medium text-black">
+                Work Duration (minutes)
+              </label>
+              <Input
+                id="work-duration"
+                type="number"
+                min="1"
+                max="120"
+                value={workMinutes}
+                onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                className="border-black rounded-none"
+              />
             </div>
-          </Card>
-        )}
 
-        {participants.length > 0 && (
-          <div className="pt-8 border-t-2 border-black/10">
-            <p className="text-xs uppercase tracking-widest text-black/40 mb-3 font-medium">
-              Active Participants ({participants.length})
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center">
-              {participants.map((p, i) => (
-                <span key={i} className="px-3 py-1 bg-black text-white text-sm font-medium">
-                  {p.user_name}
-                </span>
-              ))}
+            <div className="space-y-2">
+              <label htmlFor="break-duration" className="text-sm font-medium text-black">
+                Break Duration (minutes)
+              </label>
+              <Input
+                id="break-duration"
+                type="number"
+                min="1"
+                max="60"
+                value={breakMinutes}
+                onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                className="border-black rounded-none"
+              />
             </div>
           </div>
-        )}
+
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setShowSettings(false)}
+              variant="outline"
+              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
+            >
+              Cancel
+            </Button>
+            <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
+              Save Changes
+            </Button>
+          </div>
+        </Card>
       </div>
+      </div>
+      )}
+
+      {participants.length > 0 && (
+        <Card className="p-6 shadow-none border-none m-8">
+          <h3 className="text-sm font-medium text-black/60 rounded-8 mb-3">Participants ({participants.length})</h3>
+          <div className="flex flex-wrap gap-2">
+            {participants.map((p, i) => (
+              <div key={i} className="px-3 py-1 bg-black/5  text-sm text-black">
+                {p.user_name}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
