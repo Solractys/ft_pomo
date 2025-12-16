@@ -229,7 +229,7 @@ export function PomodoroTimer() {
     if (!currentSession) return
 
     const resetTime =
-      currentSession.session_type === "work" ? currentSession.work_duration : currentSession.break_duration
+      (currentSession.session_type || "work") === "work" ? currentSession.work_duration : currentSession.break_duration
 
     isTimerController.current = false
 
@@ -246,7 +246,7 @@ export function PomodoroTimer() {
   const switchSessionType = async () => {
     if (!currentSession) return
 
-    const newType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+    const newType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
     const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
 
     isTimerController.current = false
@@ -280,7 +280,7 @@ export function PomodoroTimer() {
         break_duration: newBreakDuration,
         time_remaining:
           currentSession.state === "idle"
-            ? currentSession.session_type === "work"
+            ? (currentSession.session_type || "work") === "work"
               ? newWorkDuration
               : newBreakDuration
             : currentSession.time_remaining,
@@ -360,7 +360,7 @@ export function PomodoroTimer() {
           }
         }
 
-        const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
+        const nextType: SessionType = (currentSession.session_type || "work") === "work" ? "break" : "work"
         const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
 
         await supabase
@@ -375,7 +375,7 @@ export function PomodoroTimer() {
 
         toast({
           title: "Time's Up!",
-          description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
+          description: (currentSession.session_type || "work") === "work" ? "Time for a break!" : "Back to work!",
         })
       }
     }, 100)
@@ -635,7 +635,7 @@ export function PomodoroTimer() {
           </h1>
 
           <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
-            {currentSession?.session_type.replace("_", " ")}
+            {currentSession?.session_type?.replace("_", " ") || "work"}
           </p>
         </div>
 
@@ -674,7 +674,7 @@ export function PomodoroTimer() {
             variant="outline"
             className="border-black hover:bg-black hover:text-white bg-transparent rounded-none font-medium"
           >
-            Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
+            Switch to {(currentSession?.session_type || "work") === "work" ? "Break" : "Work"}
           </Button>
           <Button
             onClick={leaveSession}
