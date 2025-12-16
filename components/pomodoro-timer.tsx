@@ -735,6 +735,7 @@ export function PomodoroTimer() {
                 Save Changes
               </Button>
             </div>
+            <div className=" m-auto">Code session:<b>{sessionKey}</b></div>
           </Card>
         </div>
       )}
