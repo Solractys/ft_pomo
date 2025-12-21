@@ -57,41 +57,34 @@ export function PomodoroTimer() {
   const { toast } = useToast()
   const supabase = createClient()
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const isTimerController = useRef(false)
   const notificationPlayedRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      audioRef.current = new Audio("/notification.mp3")
+      audioRef.current.volume = 0.7
+      audioRef.current.preload = "auto"
     }
 
     return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
       }
     }
   }, [])
 
   const playNotificationSound = () => {
-    if (!audioContextRef.current) return
+    if (!audioRef.current) return
 
     try {
-      const ctx = audioContextRef.current
-      const oscillator = ctx.createOscillator()
-      const gainNode = ctx.createGain()
-
-      oscillator.connect(gainNode)
-      gainNode.connect(ctx.destination)
-
-      oscillator.frequency.setValueAtTime(800, ctx.currentTime)
-      oscillator.frequency.setValueAtTime(600, ctx.currentTime + 0.1)
-
-      gainNode.gain.setValueAtTime(0.3, ctx.currentTime)
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3)
-
-      oscillator.start(ctx.currentTime)
-      oscillator.stop(ctx.currentTime + 0.3)
+      // Reset o áudio para o início caso já tenha sido tocado
+      audioRef.current.currentTime = 0
+      audioRef.current.play().catch((err) => {
+        console.error("[v0] Audio play failed:", err)
+      })
 
       console.log("[v0] Notification sound played")
     } catch (err) {
