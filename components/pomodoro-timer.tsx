@@ -1,811 +1,228 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
-import { createClient } from "@/lib/supabase/client"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff } from "lucide-react"
+import { createRoom, getRoom, roomSocketUrl } from "@/lib/pomodoro/api"
+import type { RoomCommand, RoomSnapshot, ServerMessage } from "@/lib/pomodoro/types"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Copy, Play, Pause, RotateCcw, Settings, Check, LogOut } from "lucide-react"
+import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 
-type SessionState = "idle" | "running" | "paused"
-type SessionType = "work" | "break" | "long_break"
-type FlowStep = "choice" | "join" | "create"
+type Screen = "choice" | "join" | "created" | "room"
+type Connection = "connecting" | "connected" | "offline"
+const STORAGE_KEY = "ft-pomo-participant"
 
-interface PomodoroSession {
-  id: string
-  session_key: string
-  state: SessionState
-  time_remaining: number
-  session_type: SessionType
-  started_at: string | null
-  updated_at: string
-  work_duration: number
-  break_duration: number
+function formatTime(milliseconds: number) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`
 }
 
-interface SessionParticipant {
-  user_name: string
-}
-
-const STORAGE_KEY = "pomodoro_session_data"
-
-const saveSessionData = (sessionId: string, sessionKey: string, userName: string) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId, sessionKey, userName }))
-}
-
-const getSessionData = () => {
-  const data = localStorage.getItem(STORAGE_KEY)
-  return data ? JSON.parse(data) : null
-}
-
-const clearSessionData = () => {
-  localStorage.removeItem(STORAGE_KEY)
+function participantId() {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  if (saved) return saved
+  const value = crypto.randomUUID()
+  localStorage.setItem(STORAGE_KEY, value)
+  return value
 }
 
 export function PomodoroTimer() {
-  const [flowStep, setFlowStep] = useState<FlowStep>("choice")
-  const [sessionKey, setSessionKey] = useState("")
-  const [userName, setUserName] = useState("")
-  const [currentSession, setCurrentSession] = useState<PomodoroSession | null>(null)
-  const [displayTime, setDisplayTime] = useState<number>(0)
-  const [participants, setParticipants] = useState<SessionParticipant[]>([])
-  const [isJoined, setIsJoined] = useState(false)
+  const [screen, setScreen] = useState<Screen>("choice")
+  const [key, setKey] = useState("")
+  const [name, setName] = useState("")
+  const [room, setRoom] = useState<RoomSnapshot | null>(null)
+  const [displayMs, setDisplayMs] = useState(0)
+  const [clockOffset, setClockOffset] = useState(0)
+  const [connection, setConnection] = useState<Connection>("offline")
   const [showSettings, setShowSettings] = useState(false)
   const [workMinutes, setWorkMinutes] = useState(25)
   const [breakMinutes, setBreakMinutes] = useState(5)
-  const { toast } = useToast()
-  const supabase = createClient()
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectAttempt = useRef(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const isTimerController = useRef(false)
-  const notificationPlayedRef = useRef<string | null>(null)
+  const previousRoomRef = useRef<RoomSnapshot | null>(null)
+  const intentionalClose = useRef(false)
+  const { toast } = useToast()
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      audioRef.current = new Audio("/notification.mp3")
-      audioRef.current.volume = 0.7
-      audioRef.current.preload = "auto"
-    }
-
+    audioRef.current = new Audio("/notification.mp3")
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current = null
-      }
+      audioRef.current?.pause()
+      socketRef.current?.close()
+      if (reconnectRef.current) clearTimeout(reconnectRef.current)
     }
   }, [])
 
-  const playNotificationSound = () => {
-    if (!audioRef.current) return
+  useEffect(() => {
+    const queryKey = new URLSearchParams(window.location.search).get("session")
+    if (queryKey) {
+      setKey(queryKey.toUpperCase())
+      setScreen("join")
+    }
+  }, [])
 
+  useEffect(() => {
+    if (!room) return
+    const update = () => {
+      const now = Date.now() + clockOffset
+      setDisplayMs(room.status === "running" && room.endsAt ? Math.max(0, room.endsAt - now) : room.remainingMs)
+    }
+    update()
+    if (room.status !== "running") return
+    const interval = setInterval(update, 250)
+    return () => clearInterval(interval)
+  }, [room, clockOffset])
+
+  const applySnapshot = useCallback((snapshot: RoomSnapshot) => {
+    const previous = previousRoomRef.current
+    setClockOffset(snapshot.serverNow - Date.now())
+    setRoom(snapshot)
+    setWorkMinutes(snapshot.workDurationMs / 60_000)
+    setBreakMinutes(snapshot.breakDurationMs / 60_000)
+    if (previous?.status === "running" && snapshot.status === "idle" && previous.version !== snapshot.version) {
+      audioRef.current?.play().catch(() => undefined)
+      toast({ title: "Tempo encerrado!", description: snapshot.phase === "break" ? "Hora da pausa." : "De volta ao foco." })
+    }
+    previousRoomRef.current = snapshot
+  }, [toast])
+
+  const connect = useCallback((roomKey: string, userName: string) => {
+    intentionalClose.current = false
+    socketRef.current?.close()
+    setConnection("connecting")
+    let socket: WebSocket
     try {
-      // Reset o áudio para o início caso já tenha sido tocado
-      audioRef.current.currentTime = 0
-      audioRef.current.play().catch((err) => {
-        console.error("[v0] Audio play failed:", err)
-      })
-
-      console.log("[v0] Notification sound played")
-    } catch (err) {
-      console.error("[v0] Audio play failed:", err)
-    }
-  }
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
-
-  const generateSessionKey = () => {
-    return Math.random().toString(36).substring(2, 8).toUpperCase()
-  }
-
-  const createNewSession = async () => {
-    const newKey = generateSessionKey()
-
-    const { data, error } = await supabase
-      .from("pomodoro_sessions")
-      .insert({
-        session_key: newKey,
-        state: "idle",
-        time_remaining: 25 * 60,
-        session_type: "work",
-        work_duration: 25 * 60,
-        break_duration: 5 * 60,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      console.error("[v0] Error creating session:", error)
-      toast({
-        title: "Error",
-        description: "Failed to create session",
-        variant: "destructive",
-      })
+      socket = new WebSocket(roomSocketUrl(roomKey, participantId(), userName))
+    } catch (error) {
+      setConnection("offline")
+      toast({ title: "Configuração incompleta", description: error instanceof Error ? error.message : "Não foi possível conectar", variant: "destructive" })
       return
     }
+    socketRef.current = socket
+    socket.onopen = () => {
+      reconnectAttempt.current = 0
+      setConnection("connected")
+    }
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data) as ServerMessage
+      if (message.type === "snapshot") applySnapshot(message.room)
+      else toast({ title: "Não foi possível executar", description: message.message, variant: "destructive" })
+    }
+    socket.onclose = () => {
+      if (socketRef.current === socket) socketRef.current = null
+      setConnection("offline")
+      if (intentionalClose.current) return
+      const delay = Math.min(10_000, 500 * 2 ** reconnectAttempt.current) + Math.random() * 300
+      reconnectAttempt.current += 1
+      reconnectRef.current = setTimeout(() => connect(roomKey, userName), delay)
+    }
+  }, [applySnapshot, toast])
 
-    setSessionKey(newKey)
-    setCurrentSession(data)
-    setDisplayTime(data.time_remaining)
-    setFlowStep("create")
-
-    const shareUrl = `${window.location.origin}?session=${newKey}`
-    await navigator.clipboard.writeText(shareUrl)
-
-    toast({
-      title: "Session Created",
-      description: "Link copied to clipboard!",
-    })
-  }
-
-  const joinSession = async (reconnecting = false) => {
-    if (!sessionKey.trim() || !userName.trim()) {
-      toast({
-        title: "Missing Information",
-        description: "Please enter both session key and your name",
-        variant: "destructive",
-      })
+  const send = (command: RoomCommand) => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      toast({ title: "Sem conexão", description: "Aguarde a reconexão antes de alterar o timer.", variant: "destructive" })
       return
     }
+    socketRef.current.send(JSON.stringify(command))
+  }
 
-    let session = currentSession
-
-    if (!session || session.session_key !== sessionKey.toUpperCase()) {
-      const { data: fetchedSession, error: sessionError } = await supabase
-        .from("pomodoro_sessions")
-        .select("*")
-        .eq("session_key", sessionKey.toUpperCase())
-        .single()
-
-      if (sessionError || !fetchedSession) {
-        if (reconnecting) {
-          clearSessionData()
-          toast({
-            title: "Session Ended",
-            description: "The session is no longer available",
-            variant: "destructive",
-          })
-          return
-        }
-        toast({
-          title: "Session Not Found",
-          description: "Please check the session key and try again",
-          variant: "destructive",
-        })
-        return
-      }
-
-      session = fetchedSession
-    }
-
-    const { data: existingParticipants } = await supabase
-      .from("session_participants")
-      .select("user_name")
-      .eq("session_id", session.id)
-      .eq("user_name", userName.trim())
-
-    if (!existingParticipants || existingParticipants.length === 0) {
-      const { error: participantError } = await supabase.from("session_participants").insert({
-        session_id: session.id,
-        user_name: userName.trim(),
-      })
-
-      if (participantError) {
-        console.error("Error joining session:", participantError)
-        toast({
-          title: "Error",
-          description: "Failed to join session",
-          variant: "destructive",
-        })
-        return
-      }
-    }
-
-    saveSessionData(session.id, session.session_key, userName.trim())
-
-    setCurrentSession(session)
-    setDisplayTime(session.time_remaining)
-    setIsJoined(true)
-    setWorkMinutes(Math.floor(session.work_duration / 60))
-    setBreakMinutes(Math.floor(session.break_duration / 60))
-
-    if (!reconnecting) {
-      toast({
-        title: "Joined Session",
-        description: `Welcome, ${userName}!`,
-      })
-    } else {
-      toast({
-        title: "Reconnected",
-        description: `Welcome back, ${userName}!`,
-      })
+  const handleCreate = async () => {
+    try {
+      const created = await createRoom()
+      setKey(created.key)
+      setRoom(created)
+      setScreen("created")
+      await navigator.clipboard.writeText(`${window.location.origin}?session=${created.key}`).catch(() => undefined)
+      toast({ title: "Sala criada", description: "Link copiado para a área de transferência." })
+    } catch (error) {
+      toast({ title: "Não foi possível criar a sala", description: error instanceof Error ? error.message : "Erro inesperado", variant: "destructive" })
     }
   }
 
-  const startTimer = async () => {
-    if (!currentSession) return
-
-    isTimerController.current = true
-
-    await supabase
-      .from("pomodoro_sessions")
-      .update({
-        state: "running",
-        started_at: new Date().toISOString(),
-      })
-      .eq("id", currentSession.id)
-  }
-
-  const pauseTimer = async () => {
-    if (!currentSession) return
-
-    const elapsed = currentSession.started_at
-      ? Math.floor((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
-      : 0
-    const timeRemaining = Math.max(0, currentSession.time_remaining - elapsed)
-
-    isTimerController.current = false
-
-    await supabase
-      .from("pomodoro_sessions")
-      .update({
-        state: "paused",
-        time_remaining: timeRemaining,
-      })
-      .eq("id", currentSession.id)
-  }
-
-  const resetTimer = async () => {
-    if (!currentSession) return
-
-    const resetTime =
-      currentSession.session_type === "work" ? currentSession.work_duration : currentSession.break_duration
-
-    isTimerController.current = false
-
-    await supabase
-      .from("pomodoro_sessions")
-      .update({
-        state: "idle",
-        time_remaining: resetTime,
-        started_at: null,
-      })
-      .eq("id", currentSession.id)
-  }
-
-  const switchSessionType = async () => {
-    if (!currentSession) return
-
-    const newType: SessionType = currentSession.session_type === "work" ? "break" : "work"
-    const newTime = newType === "work" ? currentSession.work_duration : currentSession.break_duration
-
-    isTimerController.current = false
-
-    await supabase
-      .from("pomodoro_sessions")
-      .update({
-        session_type: newType,
-        time_remaining: newTime,
-        state: "idle",
-        started_at: null,
-      })
-      .eq("id", currentSession.id)
-
-    toast({
-      title: "Session Switched",
-      description: `Now in ${newType} mode`,
-    })
-  }
-
-  const updateDurations = async () => {
-    if (!currentSession) return
-
-    const newWorkDuration = workMinutes * 60
-    const newBreakDuration = breakMinutes * 60
-
-    await supabase
-      .from("pomodoro_sessions")
-      .update({
-        work_duration: newWorkDuration,
-        break_duration: newBreakDuration,
-        time_remaining:
-          currentSession.state === "idle"
-            ? currentSession.session_type === "work"
-              ? newWorkDuration
-              : newBreakDuration
-            : currentSession.time_remaining,
-      })
-      .eq("id", currentSession.id)
-
-    setShowSettings(false)
-    toast({
-      title: "Durations Updated",
-      description: "Timer settings synced across all participants",
-    })
-  }
-
-  const leaveSession = async () => {
-    if (!currentSession || !userName) return
-
-    const { error: participantError } = await supabase
-      .from("session_participants")
-      .delete()
-      .eq("session_id", currentSession.id)
-      .eq("user_name", userName)
-
-    if (participantError) {
-      console.error("[v0] Error leaving session:", participantError)
-      toast({
-        title: "Error",
-        description: "Failed to leave session",
-        variant: "destructive",
-      })
+  const handleJoin = async () => {
+    const normalizedKey = key.trim().toUpperCase()
+    const normalizedName = name.trim()
+    if (normalizedKey.length !== 6 || !normalizedName) {
+      toast({ title: "Dados incompletos", description: "Informe a chave de 6 caracteres e seu nome.", variant: "destructive" })
       return
     }
-
-    clearSessionData()
-    setCurrentSession(null)
-    setIsJoined(false)
-    setFlowStep("choice")
-    setSessionKey("")
-    setUserName("")
-    setParticipants([])
-
-    toast({
-      title: "Left Session",
-      description: "You have left the Pomodoro session",
-    })
+    try {
+      const snapshot = await getRoom(normalizedKey)
+      applySnapshot(snapshot)
+      setKey(normalizedKey)
+      setName(normalizedName)
+      setScreen("room")
+      connect(normalizedKey, normalizedName)
+    } catch (error) {
+      toast({ title: "Sala não encontrada", description: error instanceof Error ? error.message : "Confira a chave.", variant: "destructive" })
+    }
   }
 
-  useEffect(() => {
-    if (!currentSession || currentSession.state !== "running") {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-        timerRef.current = null
-      }
-      setDisplayTime(currentSession?.time_remaining || 0)
-      return
-    }
-
-    const updateInterval = isTimerController.current ? 1000 : null
-
-    timerRef.current = setInterval(async () => {
-      if (!currentSession.started_at) return
-
-      const elapsed = Math.floor((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
-      const timeRemaining = Math.max(0, currentSession.time_remaining - elapsed)
-
-      setDisplayTime(timeRemaining)
-
-      if (timeRemaining <= 0) {
-        const sessionStateKey = `${currentSession.id}-${currentSession.session_type}-${currentSession.started_at}`
-
-        if (notificationPlayedRef.current !== sessionStateKey) {
-          notificationPlayedRef.current = sessionStateKey
-          playNotificationSound()
-        }
-
-        if (isTimerController.current) {
-          clearInterval(timerRef.current!)
-          isTimerController.current = false
-
-          const nextType: SessionType = currentSession.session_type === "work" ? "break" : "work"
-          const nextTime = nextType === "work" ? currentSession.work_duration : currentSession.break_duration
-
-          await supabase
-            .from("pomodoro_sessions")
-            .update({
-              state: "idle",
-              time_remaining: nextTime,
-              session_type: nextType,
-              started_at: null,
-            })
-            .eq("id", currentSession.id)
-
-          toast({
-            title: "Time's Up!",
-            description: currentSession.session_type === "work" ? "Time for a break!" : "Back to work!",
-          })
-        }
-      }
-    }, 100)
-
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-      }
-    }
-  }, [currentSession, supabase, toast])
-
-  useEffect(() => {
-    if (!currentSession) return
-
-    const channel = supabase
-      .channel(`session-${currentSession.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "pomodoro_sessions",
-          filter: `id=eq.${currentSession.id}`,
-        },
-        (payload) => {
-          if (payload.new) {
-            const newSession = payload.new as PomodoroSession
-            setCurrentSession(newSession)
-
-            if (newSession.state !== "running") {
-              setDisplayTime(newSession.time_remaining)
-            }
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "session_participants",
-          filter: `session_id=eq.${currentSession.id}`,
-        },
-        async () => {
-          const { data } = await supabase
-            .from("session_participants")
-            .select("user_name")
-            .eq("session_id", currentSession.id)
-
-          if (data) {
-            setParticipants(data)
-          }
-        },
-      )
-      .subscribe()
-
-    supabase
-      .from("session_participants")
-      .select("user_name")
-      .eq("session_id", currentSession.id)
-      .then(({ data }) => {
-        if (data) setParticipants(data)
-      })
-
-    return () => {
-      channel.unsubscribe()
-    }
-  }, [currentSession, supabase])
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const urlSessionKey = params.get("session")
-
-    const savedData = getSessionData()
-
-    if (savedData) {
-      setSessionKey(savedData.sessionKey)
-      setUserName(savedData.userName)
-      joinSession(true)
-    } else if (urlSessionKey) {
-      setSessionKey(urlSessionKey)
-      setFlowStep("join")
-    }
-  }, [])
-
-  if (!isJoined && flowStep === "choice") {
-    return (
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-6xl font-bold tracking-tight text-black">FT_POMODORO</h1>
-          <p className="text-sm text-black/60">Synchronized timer sessions. Work together :D.</p>
-          <i>by csilva-s</i>
-        </div>
-
-        <Card className="p-8 space-y-4 border-2 border-black shadow-none rounded-none">
-          <Button
-            onClick={() => setFlowStep("join")}
-            className="w-full bg-black text-white hover:bg-black/90 rounded-none h-14 font-medium text-lg"
-          >
-            Join Session
-          </Button>
-
-          <Button
-            onClick={createNewSession}
-            variant="outline"
-            className="w-full border-2 border-black hover:bg-black hover:text-white bg-transparent rounded-none h-14 font-medium text-lg"
-          >
-            Create New Session
-          </Button>
-        </Card>
-      </div>
-    )
+  const leave = () => {
+    intentionalClose.current = true
+    if (reconnectRef.current) clearTimeout(reconnectRef.current)
+    socketRef.current?.close()
+    socketRef.current = null
+    setRoom(null)
+    setScreen("choice")
+    setConnection("offline")
+    history.replaceState(null, "", window.location.pathname)
   }
 
-  if (!isJoined && flowStep === "join") {
-    return (
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold tracking-tight text-black">JOIN SESSION</h1>
-          <p className="text-sm text-black/60">Enter your details to join</p>
-        </div>
-
-        <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
-          <div className="space-y-2">
-            <label htmlFor="session-key" className="text-sm font-medium text-black">
-              Session Key
-            </label>
-            <Input
-              id="session-key"
-              value={sessionKey}
-              onChange={(e) => setSessionKey(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  joinSession(false)
-                }
-              }}
-              placeholder="Enter session key"
-              className="border-black rounded-none text-black placeholder:text-black/40"
-              maxLength={6}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="user-name" className="text-sm font-medium text-black">
-              Your Name
-            </label>
-            <Input
-              id="user-name"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  joinSession(false)
-                }
-              }}
-              placeholder="Enter your name"
-              className="border-black rounded-none text-black placeholder:text-black/40"
-            />
-          </div>
-
-          <div className="flex gap-3">
-            <Button
-              onClick={() => setFlowStep("choice")}
-              variant="outline"
-              className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none h-12 font-medium"
-            >
-              Back
-            </Button>
-            <Button
-              onClick={() => joinSession(false)}
-              className="flex-1 bg-black text-white hover:bg-black/90 rounded-none h-12 font-medium"
-            >
-              Join
-            </Button>
-          </div>
-        </Card>
-      </div>
-    )
+  const copyLink = async () => {
+    await navigator.clipboard.writeText(`${window.location.origin}?session=${key}`)
+    toast({ title: "Link copiado" })
   }
 
-  if (!isJoined && flowStep === "create") {
-    return (
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold tracking-tight text-black">SESSION CREATED</h1>
-          <p className="text-sm text-black/60">Share this key with participants</p>
-        </div>
+  if (screen === "choice") return (
+    <Shell title="FT_POMODORO" subtitle="Timer sincronizado para focar junto.">
+      <Button onClick={() => setScreen("join")} className="h-14 w-full rounded-none bg-black text-lg">Entrar em uma sala</Button>
+      <Button onClick={handleCreate} variant="outline" className="h-14 w-full rounded-none border-2 border-black text-lg">Criar nova sala</Button>
+    </Shell>
+  )
 
-        <Card className="p-8 space-y-6 border-2 border-black shadow-none rounded-none">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-black">Session Key</label>
-            <div className="flex items-center gap-2 p-4 border-2 border-black bg-black/5">
-              <code className="text-2xl font-mono font-bold text-black tracking-wider flex-1 text-center">
-                {sessionKey}
-              </code>
-              <Button
-                onClick={async () => {
-                  const shareUrl = `${window.location.origin}?session=${sessionKey}`
-                  await navigator.clipboard.writeText(shareUrl)
-                  toast({ title: "Copied!", description: "Link copied to clipboard" })
-                }}
-                variant="ghost"
-                size="icon"
-                className="hover:bg-black/10"
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
+  if (screen === "join") return (
+    <Shell title="ENTRAR NA SALA" subtitle="Informe a chave compartilhada.">
+      <Field label="Chave da sala"><Input value={key} onChange={(event) => setKey(event.target.value.toUpperCase())} maxLength={6} className="rounded-none border-black" autoFocus /></Field>
+      <Field label="Seu nome"><Input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && handleJoin()} maxLength={40} className="rounded-none border-black" /></Field>
+      <div className="flex gap-3"><Button onClick={() => setScreen("choice")} variant="outline" className="flex-1 rounded-none border-black">Voltar</Button><Button onClick={handleJoin} className="flex-1 rounded-none bg-black">Entrar</Button></div>
+    </Shell>
+  )
 
-          <div className="space-y-2">
-            <label htmlFor="creator-name" className="text-sm font-medium text-black">
-              Your Name
-            </label>
-            <Input
-              id="creator-name"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  joinSession(false)
-                }
-              }}
-              placeholder="Enter your name"
-              className="border-black rounded-none text-black placeholder:text-black/40"
-            />
-          </div>
-
-          <Button
-            onClick={() => joinSession(false)}
-            className="w-full bg-black text-white hover:bg-black/90 rounded-none h-12 font-medium"
-          >
-            Start Session
-          </Button>
-        </Card>
-      </div>
-    )
-  }
+  if (screen === "created") return (
+    <Shell title="SALA CRIADA" subtitle="Compartilhe a chave com seus amigos.">
+      <button onClick={copyLink} className="flex w-full items-center justify-center gap-3 border-2 border-black bg-black/5 p-4 font-mono text-3xl font-bold tracking-widest">{key}<Copy className="h-4 w-4" /></button>
+      <Field label="Seu nome"><Input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && handleJoin()} maxLength={40} className="rounded-none border-black" autoFocus /></Field>
+      <Button onClick={handleJoin} className="h-12 w-full rounded-none bg-black">Iniciar sessão</Button>
+    </Shell>
+  )
 
   return (
-    <div className="min-h-screen bg-white text-black flex flex-col items-center justify-center p-4">
-      <div className="absolute top-6 right-6 flex items-center gap-4">
-        <div className="text-right">
-          <p className="text-xs text-black/60">Session Key</p>
-          <div className="flex items-center gap-2">
-            <code className="text-sm font-mono font-bold text-black">{currentSession?.session_key}</code>
-            <Button
-              onClick={async () => {
-                const shareUrl = `${window.location.origin}?session=${currentSession?.session_key}`
-                await navigator.clipboard.writeText(shareUrl)
-                toast({ title: "Copied!", description: "Link copied to clipboard" })
-              }}
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 hover:bg-black/10"
-            >
-              <Copy className="h-3 w-3" />
-            </Button>
-          </div>
-        </div>
+    <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-white p-4 text-black">
+      <div className="absolute right-5 top-5 flex items-center gap-4">
+        <div className="text-right"><p className="text-xs text-black/50">Sala</p><button onClick={copyLink} className="flex items-center gap-2 font-mono font-bold">{key}<Copy className="h-3 w-3" /></button></div>
+        <span title={connection} className={connection === "connected" ? "text-green-700" : "text-amber-600"}>{connection === "connected" ? <Wifi className="h-5 w-5" /> : <WifiOff className="h-5 w-5" />}</span>
       </div>
-
-      <div className="text-center space-y-12">
-        <div className="space-y-4">
-          <h1 className="text-9xl font-bold font-mono tracking-tighter text-black tabular-nums">
-            {formatTime(displayTime)}
-          </h1>
-
-          <p className="text-sm uppercase tracking-widest text-black/60 font-medium">
-            {currentSession?.session_type.replace("_", " ")}
-          </p>
+      <section className="space-y-10 text-center">
+        <div><h1 className="font-mono text-7xl font-bold tabular-nums tracking-tighter sm:text-9xl">{formatTime(displayMs)}</h1><p className="mt-3 text-sm font-medium uppercase tracking-[0.3em] text-black/55">{room?.phase === "work" ? "foco" : "pausa"}</p></div>
+        <div className="flex justify-center gap-4">
+          <Button onClick={() => send({ type: room?.status === "running" ? "pause" : "start" })} className="h-16 w-16 rounded-full bg-black p-0">{room?.status === "running" ? <Pause fill="white" /> : <Play className="ml-1" fill="white" />}</Button>
+          <Button onClick={() => send({ type: "reset" })} variant="outline" className="h-16 w-16 rounded-full border-2 border-black p-0"><RotateCcw /></Button>
+          <Button onClick={() => send({ type: "switch" })} variant="outline" className="h-16 w-16 rounded-full border-2 border-black p-0"><Check /></Button>
         </div>
-
-        <div className="flex items-center justify-center gap-4">
-          {currentSession?.state === "running" ? (
-            <Button onClick={pauseTimer} size="lg" className="h-16 w-16 rounded-full bg-black hover:bg-black/90 p-0">
-              <Pause className="h-6 w-6" fill="white" />
-            </Button>
-          ) : (
-            <Button onClick={startTimer} size="lg" className="h-16 w-16 rounded-full bg-black hover:bg-black/90 p-0">
-              <Play className="h-6 w-6 ml-1" fill="white" />
-            </Button>
-          )}
-
-          <Button
-            onClick={resetTimer}
-            size="lg"
-            variant="outline"
-            className="h-16 w-16 rounded-full border-2 border-black hover:bg-black hover:text-white p-0 bg-transparent"
-          >
-            <RotateCcw className="h-5 w-5" />
-          </Button>
-
-          <Button
-            onClick={switchSessionType}
-            variant="outline"
-            className="h-16 w-16 rounded-full border-2 border-black hover:bg-black hover:text-white p-0 bg-transparent"
-          >
-            <Check className="h-5 w-5" />
-          </Button>
-        </div>
-
-        <Button
-          onClick={switchSessionType}
-          variant="outline"
-          className="border-black border-2 hover:bg-black hover:text-white bg-transparent rounded-8 font-medium"
-        >
-          Switch to {currentSession?.session_type === "work" ? "Break" : "Work"}
-        </Button>
-      </div>
-      <div className="top-4 m-4 right-4 flex gap-2">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => setShowSettings(!showSettings)}
-          className="border-2 border-black hover:bg-black hover:text-white transition-colors"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={leaveSession}
-          className="border-2 border-black hover:bg-black hover:text-white transition-colors bg-transparent"
-        >
-          <LogOut className="h-4 w-4" />
-        </Button>
-      </div>
-
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 py-13 bg-black/50 backdrop-blur-sm">
-            <Card className="relative w-3/6 m-auto p-6 space-y-6 border-none shadow-none rounded-8">
-              <h3 className="text-lg font-bold text-black">Timer Settings</h3>
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label htmlFor="work-duration" className="text-sm font-medium text-black">
-                    Work Duration (minutes)
-                  </label>
-                  <Input
-                    id="work-duration"
-                    type="number"
-                    min="1"
-                    max="120"
-                    value={workMinutes}
-                    onChange={(e) => setWorkMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                    className="border-black rounded-none"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label htmlFor="break-duration" className="text-sm font-medium text-black">
-                    Break Duration (minutes)
-                  </label>
-                  <Input
-                    id="break-duration"
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={breakMinutes}
-                    onChange={(e) => setBreakMinutes(Math.max(1, Number.parseInt(e.target.value) || 1))}
-                    className="border-black rounded-none"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => setShowSettings(false)}
-                  variant="outline"
-                  className="flex-1 border-black hover:bg-black/10 bg-transparent rounded-none"
-                >
-                  Cancel
-                </Button>
-                <Button onClick={updateDurations} className="flex-1 bg-black text-white hover:bg-black/90 rounded-none">
-                  Save Changes
-                </Button>
-              </div>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {participants.length > 0 && (
-        <Card className="p-6 border-none shadow-none">
-          <h3 className="text-sm font-medium text-black/60 mb-3">Participants ({participants.length})</h3>
-          <div className="flex flex-wrap gap-2">
-            {participants.map((p, i) => (
-              <div key={i} className="px-3 py-1 bg-black/5 text-sm text-black">
-                {p.user_name}
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-    </div>
+      </section>
+      <div className="flex gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" size="icon" className="border-2 border-black"><Settings className="h-4 w-4" /></Button><Button onClick={leave} variant="outline" size="icon" className="border-2 border-black"><LogOut className="h-4 w-4" /></Button></div>
+      {!!room?.participants.length && <Card className="border-0 p-5 shadow-none"><p className="mb-3 text-center text-xs text-black/50">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-2">{room.participants.map((participant) => <span key={participant} className="bg-black/5 px-3 py-1 text-sm">{participant}</span>)}</div></Card>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-md space-y-5 rounded-none p-6"><h2 className="text-lg font-bold">Duração do timer</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="flex-1 rounded-none border-black">Cancelar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="flex-1 rounded-none bg-black">Salvar</Button></div></Card></div>}
+    </main>
   )
+}
+
+function Shell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+  return <div className="w-full max-w-md space-y-7"><header className="space-y-2 text-center"><h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1><p className="text-sm text-black/55">{subtitle}</p></header><Card className="space-y-5 rounded-none border-2 border-black p-7 shadow-none">{children}</Card></div>
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="block space-y-2"><span className="text-sm font-medium">{label}</span>{children}</label>
 }
