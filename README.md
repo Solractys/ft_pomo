@@ -1,30 +1,57 @@
-# Pomodoro timer app
+# FT_POMODORO
 
-*Automatically synced with your [v0.app](https://v0.app) deployments*
+Pomodoro compartilhado com timer sincronizado entre todos os participantes de uma sala.
 
-[![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?style=for-the-badge&logo=vercel)](https://vercel.com/carlos-projects-bcbf638a/v0-pomodoro-timer-app)
-[![Built with v0](https://img.shields.io/badge/Built%20with-v0.app-black?style=for-the-badge)](https://v0.app/chat/gkyw1ye4AHg)
+## Arquitetura
 
-## Overview
+- **Next.js/Vercel**: interface.
+- **Cloudflare Worker**: API HTTP.
+- **Cloudflare D1**: persistência SQLite das salas.
+- **Durable Objects**: WebSockets, presença e serialização dos comandos.
+- **Durable Object Alarms**: troca de fase mesmo sem uma aba controladora aberta.
 
-This repository will stay in sync with your deployed chats on [v0.app](https://v0.app).
-Any changes you make to your deployed app will be automatically pushed to this repository from [v0.app](https://v0.app).
+O servidor envia somente mudanças de estado. Durante a contagem, cada navegador calcula o tempo restante a partir de `endsAt` e do relógio do servidor; não há escrita ou mensagem a cada segundo.
 
-## Deployment
+## Desenvolvimento local
 
-Your project is live at:
+```bash
+npm install
+cp .env.example .env.local
+npm run worker:db:migrate:local
+```
 
-**[https://vercel.com/carlos-projects-bcbf638a/v0-pomodoro-timer-app](https://vercel.com/carlos-projects-bcbf638a/v0-pomodoro-timer-app)**
+Em terminais separados:
 
-## Build your app
+```bash
+npm run worker:dev
+npm run dev
+```
 
-Continue building your app on:
+Abra `http://localhost:3000`. O Worker local responde em `http://localhost:8787`.
 
-**[https://v0.app/chat/gkyw1ye4AHg](https://v0.app/chat/gkyw1ye4AHg)**
+## Validação
 
-## How It Works
+```bash
+npm run worker:typecheck
+npx tsc --noEmit
+npm run build
+```
 
-1. Create and modify your project using [v0.app](https://v0.app)
-2. Deploy your chats from the v0 interface
-3. Changes are automatically pushed to this repository
-4. Vercel deploys the latest version from this repository
+Para testar a sincronização, abra a mesma chave de sala em dois navegadores ou em uma janela anônima.
+
+## Publicação do backend
+
+1. Autentique o Wrangler com `npx wrangler login`.
+2. Crie o banco com `npx wrangler d1 create ft-pomo`.
+3. Copie o `database_id` retornado para `worker/wrangler.jsonc`.
+4. Troque `APP_ORIGIN` no mesmo arquivo pelo domínio da Vercel. Para permitir desenvolvimento e produção, use os dois separados por vírgula.
+5. Execute `npm run worker:db:migrate` e `npm run worker:deploy`.
+6. Na Vercel, configure `NEXT_PUBLIC_REALTIME_API_URL` com a URL publicada do Worker e faça um novo deploy.
+
+## Regras atuais
+
+- Todos os participantes podem controlar o timer.
+- Foco aceita de 1 a 120 minutos; pausa, de 1 a 60 minutos.
+- Salas expiram após 24 horas sem uma alteração no timer.
+- Salas expiradas são removidas diariamente.
+- Participantes são presença em tempo real e não ficam armazenados no banco.
