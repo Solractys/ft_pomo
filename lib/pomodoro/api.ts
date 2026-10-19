@@ -8,11 +8,12 @@ const apiUrl = () => {
 }
 
 async function request<T extends object = RoomSnapshot>(path: string, init?: RequestInit): Promise<T> {
-  const token = await getRealtimeToken()
-  const response = await fetch(`${apiUrl()}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...init?.headers },
-  })
+  const send = async (token: string) => fetch(`${apiUrl()}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...init?.headers },
+    })
+  let response = await send(await getRealtimeToken())
+  if (response.status === 401) response = await send(await getRealtimeToken(true))
 
   const body = (await response.json()) as T | { error: string }
   if (!response.ok) throw new Error("error" in body ? body.error : "Request failed")

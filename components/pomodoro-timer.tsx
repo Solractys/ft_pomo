@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
-import { Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff } from "lucide-react"
+import { ArrowLeft, Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, UserRound, Wifi, WifiOff } from "lucide-react"
 import { createRoom, getRoom, roomSocketUrl } from "@/lib/pomodoro/api"
 import { getRealtimeToken } from "@/lib/auth/token"
 import type { RoomCommand, RoomSnapshot, ServerMessage } from "@/lib/pomodoro/types"
@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 
-type Screen = "choice" | "join" | "created" | "room"
+type Screen = "choice" | "join" | "created" | "loading" | "room"
 type Connection = "connecting" | "connected" | "offline"
 
 function formatTime(milliseconds: number) {
@@ -42,20 +42,11 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   useEffect(() => {
     audioRef.current = new Audio("/notification.mp3")
     return () => {
+      intentionalClose.current = true
       audioRef.current?.pause()
       socketRef.current?.close()
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
     }
-  }, [])
-
-  useEffect(() => {
-    const queryKey = new URLSearchParams(window.location.search).get("session")
-    if (!queryKey) return
-    const timeout = setTimeout(() => {
-      setKey(queryKey.toUpperCase())
-      setScreen("join")
-    }, 0)
-    return () => clearTimeout(timeout)
   }, [])
 
   useEffect(() => {
@@ -123,6 +114,34 @@ export function PomodoroTimer({ userName }: { userName: string }) {
     connectRef.current = connect
   }, [connect])
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const queryKey = params.get("session")?.toUpperCase()
+    if (!queryKey || !/^[A-Z0-9]{6}$/.test(queryKey)) return
+
+    let cancelled = false
+    const timeout = window.setTimeout(() => {
+      setKey(queryKey)
+      if (params.get("return") !== "room") {
+        setScreen("join")
+        return
+      }
+
+      setScreen("loading")
+      getRoom(queryKey).then((snapshot) => {
+        if (cancelled) return
+        applySnapshot(snapshot)
+        setScreen("room")
+        connect(queryKey, userName)
+      }).catch((error: unknown) => {
+        if (cancelled) return
+        setScreen("join")
+        toast({ title: "Não foi possível voltar à sala", description: error instanceof Error ? error.message : "Confira se a sala ainda está ativa.", variant: "destructive" })
+      })
+    }, 0)
+    return () => { cancelled = true; window.clearTimeout(timeout) }
+  }, [applySnapshot, connect, toast, userName])
+
   const send = (command: RoomCommand) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
       toast({ title: "Sem conexão", description: "Aguarde a reconexão antes de alterar o timer.", variant: "destructive" })
@@ -154,6 +173,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
       const snapshot = await getRoom(normalizedKey)
       applySnapshot(snapshot)
       setKey(normalizedKey)
+      history.replaceState(null, "", `/?session=${normalizedKey}`)
       setScreen("room")
       connect(normalizedKey, userName)
     } catch (error) {
@@ -189,51 +209,77 @@ export function PomodoroTimer({ userName }: { userName: string }) {
 
   if (screen === "choice") return (
     <Shell title="FT_POMODORO" subtitle="Timer sincronizado para focar junto.">
-      <Button onClick={() => setScreen("join")} className="h-14 w-full rounded-none bg-black text-lg">Entrar em uma sala</Button>
-      <Button onClick={handleCreate} variant="outline" className="h-14 w-full rounded-none border-2 border-black text-lg">Criar nova sala</Button>
+      <Link href="/profile" className="mx-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><UserRound className="size-4" />Meu perfil</Link>
+      <Button onClick={() => setScreen("join")} className="h-14 w-full text-lg">Entrar em uma sala</Button>
+      <Button onClick={handleCreate} variant="outline" className="h-14 w-full text-lg">Criar nova sala</Button>
     </Shell>
   )
 
   if (screen === "join") return (
     <Shell title="ENTRAR NA SALA" subtitle="Informe a chave compartilhada.">
-      <Field label="Chave da sala"><Input value={key} onChange={(event) => setKey(event.target.value.toUpperCase())} maxLength={6} className="rounded-none border-black" autoFocus /></Field>
-      <p className="text-xs text-black/50">Entrando como {userName}</p>
-      <div className="flex gap-3"><Button onClick={() => setScreen("choice")} variant="outline" className="flex-1 rounded-none border-black">Voltar</Button><Button onClick={handleJoin} className="flex-1 rounded-none bg-black">Entrar</Button></div>
+      <Field label="Chave da sala"><Input value={key} onChange={(event) => setKey(event.target.value.toUpperCase())} maxLength={6} className="font-mono text-center text-xl tracking-widest" autoFocus /></Field>
+      <p className="text-xs text-muted-foreground">Entrando como {userName}</p>
+      <div className="flex gap-3"><Button onClick={() => setScreen("choice")} variant="outline" className="min-h-11 flex-1"><ArrowLeft />Voltar</Button><Button onClick={handleJoin} className="min-h-11 flex-1">Entrar</Button></div>
     </Shell>
   )
 
   if (screen === "created") return (
     <Shell title="SALA CRIADA" subtitle="Compartilhe a chave com seus amigos.">
-      <button onClick={copyLink} className="flex w-full items-center justify-center gap-3 border-2 border-black bg-black/5 p-4 font-mono text-3xl font-bold tracking-widest">{key}<Copy className="h-4 w-4" /></button>
-      <p className="text-center text-xs text-black/50">Entrando como {userName}</p>
-      <Button onClick={handleJoin} className="h-12 w-full rounded-none bg-black">Iniciar sessão</Button>
+      <Button onClick={copyLink} variant="outline" className="h-auto w-full justify-center py-4 font-mono text-3xl font-bold tracking-widest">{key}<Copy className="h-4 w-4" /><span className="sr-only">Copiar link da sala</span></Button>
+      <p className="text-center text-xs text-muted-foreground">Entrando como {userName}</p>
+      <Button onClick={() => setScreen("choice")} variant="ghost" className="w-full"><ArrowLeft />Voltar</Button>
+      <Button onClick={handleJoin} className="h-12 w-full">Iniciar sessão</Button>
+    </Shell>
+  )
+
+  if (screen === "loading") return (
+    <Shell title="VOLTANDO À SALA" subtitle="Reconectando sua sessão…">
+      <p role="status" className="text-center text-sm text-muted-foreground">Aguarde um instante.</p>
     </Shell>
   )
 
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-white p-4 text-black">
-      <div className="absolute right-5 top-5 flex items-center gap-4">
-        <Link href="/profile" className="text-xs underline">Meu perfil</Link>
-        <div className="text-right"><p className="text-xs text-black/50">Sala</p><button onClick={copyLink} className="flex items-center gap-2 font-mono font-bold">{key}<Copy className="h-3 w-3" /></button></div>
-        <span title={connection} className={connection === "connected" ? "text-green-700" : "text-amber-600"}>{connection === "connected" ? <Wifi className="h-5 w-5" /> : <WifiOff className="h-5 w-5" />}</span>
+    <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-background p-4 pt-20 text-foreground sm:pt-24">
+      <div className="absolute right-4 top-4 flex max-w-[calc(100%-2rem)] flex-wrap items-center justify-end gap-2 sm:right-5 sm:top-5">
+        <Link href={`/profile?session=${key}`} className="hidden min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline-flex"><UserRound className="size-4" />Meu perfil</Link>
+        <button onClick={copyLink} aria-label={`Copiar link da sala ${key}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="text-muted-foreground">Sala</span><span className="font-mono font-semibold">{key}</span><Copy className="size-4 text-muted-foreground" /></button>
+        <span title={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} aria-label={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} className={`inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm ${connection === "connected" ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>{connection === "connected" ? <Wifi className="size-4" /> : <WifiOff className="size-4" />}<span className="text-foreground">{connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"}</span></span>
       </div>
       <section className="space-y-10 text-center">
-        <div><h1 className="font-mono text-7xl font-bold tabular-nums tracking-tighter sm:text-9xl">{formatTime(displayMs)}</h1><p className="mt-3 text-sm font-medium uppercase tracking-[0.3em] text-black/55">{room?.phase === "work" ? "foco" : "pausa"}</p></div>
+        <div><h1 className="font-mono text-7xl font-bold tabular-nums tracking-tighter sm:text-9xl">{formatTime(displayMs)}</h1><p className="mt-3 text-sm font-medium uppercase tracking-[0.3em] text-muted-foreground">{room?.phase === "work" ? "foco" : "pausa"}</p></div>
         <div className="flex justify-center gap-4">
-          <Button onClick={() => send({ type: room?.status === "running" ? "pause" : "start" })} className="h-16 w-16 rounded-full bg-black p-0">{room?.status === "running" ? <Pause fill="white" /> : <Play className="ml-1" fill="white" />}</Button>
-          <Button onClick={() => send({ type: "reset" })} variant="outline" className="h-16 w-16 rounded-full border-2 border-black p-0"><RotateCcw /></Button>
-          <Button onClick={() => send({ type: "switch" })} variant="outline" className="h-16 w-16 rounded-full border-2 border-black p-0"><Check /></Button>
+          <Button aria-label={room?.status === "running" ? "Pausar timer" : "Iniciar timer"} onClick={() => send({ type: room?.status === "running" ? "pause" : "start" })} className="h-16 w-16 rounded-full p-0">{room?.status === "running" ? <Pause /> : <Play className="ml-1" />}</Button>
+          <Button aria-label="Reiniciar timer" onClick={() => send({ type: "reset" })} variant="outline" className="h-16 w-16 rounded-full p-0"><RotateCcw /></Button>
+          <Button aria-label="Alternar entre foco e pausa" onClick={() => send({ type: "switch" })} variant="outline" className="h-16 w-16 rounded-full p-0"><Check /></Button>
         </div>
       </section>
-      <div className="flex gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" size="icon" className="border-2 border-black"><Settings className="h-4 w-4" /></Button><Button onClick={leave} variant="outline" size="icon" className="border-2 border-black"><LogOut className="h-4 w-4" /></Button></div>
-      {!!room?.participants.length && <Card className="border-0 p-5 shadow-none"><p className="mb-3 text-center text-xs text-black/50">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-2">{room.participants.map((participant) => <span key={participant} className="bg-black/5 px-3 py-1 text-sm">{participant}</span>)}</div></Card>}
-      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-md space-y-5 rounded-none p-6"><h2 className="text-lg font-bold">Configurações</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Button onClick={enableNotifications} variant="outline" className="w-full rounded-none border-black">{notificationsEnabled ? "Notificações ativadas" : "Ativar notificações de desktop"}</Button><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="flex-1 rounded-none border-black">Fechar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="flex-1 rounded-none bg-black">Salvar</Button></div></Card></div>}
+      <div className="flex flex-wrap justify-center gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" className="min-h-11"><Settings className="h-4 w-4" />Configurações</Button><Button onClick={leave} variant="outline" className="min-h-11"><LogOut className="h-4 w-4" />Sair da sala</Button><Link href={`/profile?session=${key}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"><UserRound className="size-4" />Meu perfil</Link></div>
+      {!!room?.participants.length && <section aria-label="Participantes" className="space-y-3"><p className="text-center text-xs text-muted-foreground">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-4">{room.participants.map((participant) => <ParticipantAvatar key={participant.id} name={participant.name} image={participant.image} animate={room.status === "running" && room.phase === "work"} />)}</div></section>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false) }}><Card role="dialog" aria-modal="true" aria-labelledby="settings-title" className="w-full max-w-md space-y-5 p-6"><h2 id="settings-title" className="text-lg font-bold">Configurações</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} /></Field><Button onClick={enableNotifications} variant="outline" className="w-full">{notificationsEnabled ? "Notificações ativadas" : "Ativar notificações de desktop"}</Button><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="min-h-11 flex-1">Fechar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="min-h-11 flex-1">Salvar</Button></div></Card></div>}
     </main>
   )
 }
 
+function ParticipantAvatar({ name, image, animate }: { name: string; image?: string; animate: boolean }) {
+  const initials = name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase()
+  const [imageFailed, setImageFailed] = useState(false)
+
+  return <div className="flex min-w-20 flex-col items-center gap-2" title={name}>
+    <div className={`participant-avatar-frame ${animate ? "participant-avatar-focus" : ""}`}>
+      <div className="participant-avatar">
+        {image && !imageFailed
+          // Google avatar hosts vary by account, so render their URL directly instead of requiring a fixed image-host allowlist.
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={image} alt={name} className="size-full rounded-full object-cover" onError={() => setImageFailed(true)} />
+          : <span role="img" aria-label={`Avatar de ${name}`} className="flex size-full items-center justify-center rounded-full text-sm font-semibold text-foreground">{initials || "?"}</span>}
+      </div>
+    </div>
+    <span className="max-w-24 truncate text-xs text-muted-foreground">{name}</span>
+  </div>
+}
+
 function Shell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
-  return <div className="w-full max-w-md space-y-7"><header className="space-y-2 text-center"><h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1><p className="text-sm text-black/55">{subtitle}</p></header><Card className="space-y-5 rounded-none border-2 border-black p-7 shadow-none">{children}</Card></div>
+  return <div className="w-full max-w-md space-y-7 text-foreground"><header className="space-y-2 text-center"><h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1><p className="text-sm text-muted-foreground">{subtitle}</p></header><Card className="space-y-5 p-7 shadow-none">{children}</Card></div>
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

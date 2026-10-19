@@ -1,10 +1,13 @@
 import type { Metadata } from "next"
 import type React from "react"
+import { Github } from "lucide-react"
 
 import { Analytics } from "@vercel/analytics/next"
 import "./globals.css"
 
 import { Toaster } from "@/components/ui/toaster"
+import { ThemeProvider } from "@/components/theme-provider"
+import { ThemeControls } from "@/components/theme-controls"
 
 export const metadata: Metadata = {
   title: "Pomodoro Timer - Synchronized Sessions",
@@ -35,11 +38,24 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
-        {children}
-        <Analytics />
-        <Toaster />
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="ft-pomo-color-mode">
+          <ThemeControls />
+          {children}
+          <a
+            href="https://github.com/Solractys/ft_pomo"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Contribuir no GitHub (abre em nova aba)"
+            className="fixed bottom-4 right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-medium text-card-foreground shadow-md transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Github className="size-4" />
+            Contribuir
+          </a>
+          <Analytics />
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   )
