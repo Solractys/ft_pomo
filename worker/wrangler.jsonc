@@ -5,20 +5,34 @@
   "compatibility_date": "2026-09-01",
   "durable_objects": {
     "bindings": [
-      { "name": "ROOMS", "class_name": "PomodoroRoom" }
+      {
+        "name": "ROOMS",
+        "class_name": "PomodoroRoom"
+      }
     ]
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "ft-pomo",
-      "database_id": "replace-with-your-d1-database-id",
+      "database_id": "17091978-0f75-473f-a730-ff067c6dea00",
       "migrations_dir": "migrations"
     }
   ],
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PomodoroRoom"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "PomodoroRoom"
+      ]
+    }
   ],
-  "triggers": { "crons": ["17 4 * * *"] },
-  "vars": { "APP_ORIGIN": "http://localhost:3000" }
+  "triggers": {
+    "crons": [
+      "17 4 * * *"
+    ]
+  },
+  "vars": {
+    "APP_ORIGIN": "http://localhost:3000,https://v0-ft-pomo.vercel.app"
+  }
 }
