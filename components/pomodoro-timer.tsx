@@ -38,6 +38,7 @@ export function PomodoroTimer() {
   const [workMinutes, setWorkMinutes] = useState(25)
   const [breakMinutes, setBreakMinutes] = useState(5)
   const socketRef = useRef<WebSocket | null>(null)
+  const connectRef = useRef<(roomKey: string, userName: string) => void>(() => undefined)
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttempt = useRef(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -56,10 +57,12 @@ export function PomodoroTimer() {
 
   useEffect(() => {
     const queryKey = new URLSearchParams(window.location.search).get("session")
-    if (queryKey) {
+    if (!queryKey) return
+    const timeout = setTimeout(() => {
       setKey(queryKey.toUpperCase())
       setScreen("join")
-    }
+    }, 0)
+    return () => clearTimeout(timeout)
   }, [])
 
   useEffect(() => {
@@ -115,9 +118,13 @@ export function PomodoroTimer() {
       if (intentionalClose.current) return
       const delay = Math.min(10_000, 500 * 2 ** reconnectAttempt.current) + Math.random() * 300
       reconnectAttempt.current += 1
-      reconnectRef.current = setTimeout(() => connect(roomKey, userName), delay)
+      reconnectRef.current = setTimeout(() => connectRef.current(roomKey, userName), delay)
     }
   }, [applySnapshot, toast])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   const send = (command: RoomCommand) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
