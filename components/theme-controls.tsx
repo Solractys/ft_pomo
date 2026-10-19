@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { MonitorCog, Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 import { Button } from "@/components/ui/button"
@@ -17,8 +17,29 @@ const paletteStorageKey = "ft-pomo-palette"
 
 export function ThemeControls() {
   const { setTheme, theme } = useTheme()
+  const menuRef = useRef<HTMLDetailsElement>(null)
   const [palette, setPalette] = useState("default")
   const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) {
+        if (menuRef.current) menuRef.current.open = false
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !menuRef.current?.open) return
+      menuRef.current.open = false
+      menuRef.current.querySelector("summary")?.focus()
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer)
+    document.addEventListener("keydown", closeOnEscape)
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer)
+      document.removeEventListener("keydown", closeOnEscape)
+    }
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -36,7 +57,7 @@ export function ThemeControls() {
   }, [palette, ready])
 
   return (
-    <details className="theme-menu fixed left-4 top-4 z-40">
+    <details ref={menuRef} className="theme-menu fixed left-4 top-4 z-40">
       <summary aria-label="Personalizar aparência" title="Personalizar aparência">
         <MonitorCog className="size-4" />
         <span className="hidden sm:inline">Aparência</span>
