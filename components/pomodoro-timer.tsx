@@ -1,8 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import Link from "next/link"
 import { Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff } from "lucide-react"
 import { createRoom, getRoom, roomSocketUrl } from "@/lib/pomodoro/api"
+import { getRealtimeToken } from "@/lib/auth/token"
 import type { RoomCommand, RoomSnapshot, ServerMessage } from "@/lib/pomodoro/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -11,25 +13,15 @@ import { useToast } from "@/hooks/use-toast"
 
 type Screen = "choice" | "join" | "created" | "room"
 type Connection = "connecting" | "connected" | "offline"
-const STORAGE_KEY = "ft-pomo-participant"
 
 function formatTime(milliseconds: number) {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
   return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`
 }
 
-function participantId() {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) return saved
-  const value = crypto.randomUUID()
-  localStorage.setItem(STORAGE_KEY, value)
-  return value
-}
-
-export function PomodoroTimer() {
+export function PomodoroTimer({ userName }: { userName: string }) {
   const [screen, setScreen] = useState<Screen>("choice")
   const [key, setKey] = useState("")
-  const [name, setName] = useState("")
   const [room, setRoom] = useState<RoomSnapshot | null>(null)
   const [displayMs, setDisplayMs] = useState(0)
   const [clockOffset, setClockOffset] = useState(0)
@@ -37,6 +29,7 @@ export function PomodoroTimer() {
   const [showSettings, setShowSettings] = useState(false)
   const [workMinutes, setWorkMinutes] = useState(25)
   const [breakMinutes, setBreakMinutes] = useState(5)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const socketRef = useRef<WebSocket | null>(null)
   const connectRef = useRef<(roomKey: string, userName: string) => void>(() => undefined)
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -85,18 +78,22 @@ export function PomodoroTimer() {
     setBreakMinutes(snapshot.breakDurationMs / 60_000)
     if (previous?.status === "running" && snapshot.status === "idle" && previous.version !== snapshot.version) {
       audioRef.current?.play().catch(() => undefined)
-      toast({ title: "Tempo encerrado!", description: snapshot.phase === "break" ? "Hora da pausa." : "De volta ao foco." })
+      const message = snapshot.phase === "break" ? "Hora da pausa." : "De volta ao foco."
+      toast({ title: "Tempo encerrado!", description: message })
+      if (document.hidden && "Notification" in window && Notification.permission === "granted") new Notification("FT_POMODORO", { body: message })
     }
     previousRoomRef.current = snapshot
   }, [toast])
 
-  const connect = useCallback((roomKey: string, userName: string) => {
+  const connect = useCallback(async (roomKey: string, userName: string) => {
     intentionalClose.current = false
     socketRef.current?.close()
     setConnection("connecting")
     let socket: WebSocket
     try {
-      socket = new WebSocket(roomSocketUrl(roomKey, participantId(), userName))
+      const token = await getRealtimeToken()
+      const socketOptions = roomSocketUrl(roomKey, token)
+      socket = new WebSocket(socketOptions.url, socketOptions.protocols)
     } catch (error) {
       setConnection("offline")
       toast({ title: "Configuração incompleta", description: error instanceof Error ? error.message : "Não foi possível conectar", variant: "destructive" })
@@ -149,18 +146,16 @@ export function PomodoroTimer() {
 
   const handleJoin = async () => {
     const normalizedKey = key.trim().toUpperCase()
-    const normalizedName = name.trim()
-    if (normalizedKey.length !== 6 || !normalizedName) {
-      toast({ title: "Dados incompletos", description: "Informe a chave de 6 caracteres e seu nome.", variant: "destructive" })
+    if (normalizedKey.length !== 6) {
+      toast({ title: "Chave inválida", description: "Informe a chave de 6 caracteres.", variant: "destructive" })
       return
     }
     try {
       const snapshot = await getRoom(normalizedKey)
       applySnapshot(snapshot)
       setKey(normalizedKey)
-      setName(normalizedName)
       setScreen("room")
-      connect(normalizedKey, normalizedName)
+      connect(normalizedKey, userName)
     } catch (error) {
       toast({ title: "Sala não encontrada", description: error instanceof Error ? error.message : "Confira a chave.", variant: "destructive" })
     }
@@ -182,6 +177,16 @@ export function PomodoroTimer() {
     toast({ title: "Link copiado" })
   }
 
+  const enableNotifications = async () => {
+    if (!("Notification" in window)) {
+      toast({ title: "Notificações indisponíveis", description: "Este navegador não oferece notificações de desktop." })
+      return
+    }
+    const permission = await Notification.requestPermission()
+    setNotificationsEnabled(permission === "granted")
+    toast({ title: permission === "granted" ? "Notificações ativadas" : "Permissão não concedida" })
+  }
+
   if (screen === "choice") return (
     <Shell title="FT_POMODORO" subtitle="Timer sincronizado para focar junto.">
       <Button onClick={() => setScreen("join")} className="h-14 w-full rounded-none bg-black text-lg">Entrar em uma sala</Button>
@@ -192,7 +197,7 @@ export function PomodoroTimer() {
   if (screen === "join") return (
     <Shell title="ENTRAR NA SALA" subtitle="Informe a chave compartilhada.">
       <Field label="Chave da sala"><Input value={key} onChange={(event) => setKey(event.target.value.toUpperCase())} maxLength={6} className="rounded-none border-black" autoFocus /></Field>
-      <Field label="Seu nome"><Input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && handleJoin()} maxLength={40} className="rounded-none border-black" /></Field>
+      <p className="text-xs text-black/50">Entrando como {userName}</p>
       <div className="flex gap-3"><Button onClick={() => setScreen("choice")} variant="outline" className="flex-1 rounded-none border-black">Voltar</Button><Button onClick={handleJoin} className="flex-1 rounded-none bg-black">Entrar</Button></div>
     </Shell>
   )
@@ -200,7 +205,7 @@ export function PomodoroTimer() {
   if (screen === "created") return (
     <Shell title="SALA CRIADA" subtitle="Compartilhe a chave com seus amigos.">
       <button onClick={copyLink} className="flex w-full items-center justify-center gap-3 border-2 border-black bg-black/5 p-4 font-mono text-3xl font-bold tracking-widest">{key}<Copy className="h-4 w-4" /></button>
-      <Field label="Seu nome"><Input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && handleJoin()} maxLength={40} className="rounded-none border-black" autoFocus /></Field>
+      <p className="text-center text-xs text-black/50">Entrando como {userName}</p>
       <Button onClick={handleJoin} className="h-12 w-full rounded-none bg-black">Iniciar sessão</Button>
     </Shell>
   )
@@ -208,6 +213,7 @@ export function PomodoroTimer() {
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-white p-4 text-black">
       <div className="absolute right-5 top-5 flex items-center gap-4">
+        <Link href="/profile" className="text-xs underline">Meu perfil</Link>
         <div className="text-right"><p className="text-xs text-black/50">Sala</p><button onClick={copyLink} className="flex items-center gap-2 font-mono font-bold">{key}<Copy className="h-3 w-3" /></button></div>
         <span title={connection} className={connection === "connected" ? "text-green-700" : "text-amber-600"}>{connection === "connected" ? <Wifi className="h-5 w-5" /> : <WifiOff className="h-5 w-5" />}</span>
       </div>
@@ -221,7 +227,7 @@ export function PomodoroTimer() {
       </section>
       <div className="flex gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" size="icon" className="border-2 border-black"><Settings className="h-4 w-4" /></Button><Button onClick={leave} variant="outline" size="icon" className="border-2 border-black"><LogOut className="h-4 w-4" /></Button></div>
       {!!room?.participants.length && <Card className="border-0 p-5 shadow-none"><p className="mb-3 text-center text-xs text-black/50">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-2">{room.participants.map((participant) => <span key={participant} className="bg-black/5 px-3 py-1 text-sm">{participant}</span>)}</div></Card>}
-      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-md space-y-5 rounded-none p-6"><h2 className="text-lg font-bold">Duração do timer</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="flex-1 rounded-none border-black">Cancelar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="flex-1 rounded-none bg-black">Salvar</Button></div></Card></div>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-md space-y-5 rounded-none p-6"><h2 className="text-lg font-bold">Configurações</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} className="rounded-none border-black" /></Field><Button onClick={enableNotifications} variant="outline" className="w-full rounded-none border-black">{notificationsEnabled ? "Notificações ativadas" : "Ativar notificações de desktop"}</Button><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="flex-1 rounded-none border-black">Fechar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="flex-1 rounded-none bg-black">Salvar</Button></div></Card></div>}
     </main>
   )
 }
