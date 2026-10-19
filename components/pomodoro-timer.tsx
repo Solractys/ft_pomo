@@ -264,7 +264,7 @@ function ParticipantAvatar({ name, image, animate }: { name: string; image?: str
   const initials = name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase()
   const [imageFailed, setImageFailed] = useState(false)
 
-  return <div className="flex min-w-16 flex-col items-center gap-2" title={name}>
+  return <div className="flex min-w-20 flex-col items-center gap-2" title={name}>
     <div className={`participant-avatar-frame ${animate ? "participant-avatar-focus" : ""}`}>
       <div className="participant-avatar">
         {image && !imageFailed
