@@ -5,6 +5,8 @@ import { Analytics } from "@vercel/analytics/next"
 import "./globals.css"
 
 import { Toaster } from "@/components/ui/toaster"
+import { ThemeProvider } from "@/components/theme-provider"
+import { ThemeControls } from "@/components/theme-controls"
 
 export const metadata: Metadata = {
   title: "Pomodoro Timer - Synchronized Sessions",
@@ -35,11 +37,14 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
-        {children}
-        <Analytics />
-        <Toaster />
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="ft-pomo-color-mode">
+          <ThemeControls />
+          {children}
+          <Analytics />
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   )

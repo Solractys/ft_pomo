@@ -1,6 +1,12 @@
 export type TimerStatus = "idle" | "running" | "paused"
 export type TimerPhase = "work" | "break"
 
+export interface RoomParticipant {
+  id: string
+  name: string
+  image?: string
+}
+
 export interface RoomSnapshot {
   id: string
   key: string
@@ -13,7 +19,7 @@ export interface RoomSnapshot {
   endsAt: number | null
   version: number
   serverNow: number
-  participants: string[]
+  participants: RoomParticipant[]
 }
 
 export type RoomCommand =

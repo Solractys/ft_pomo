@@ -28,8 +28,10 @@ interface RoomRow {
 }
 
 interface Attachment {
+  participantId: string
   userId: string
   name: string
+  image?: string
 }
 
 const DAY_MS = 86_400_000
@@ -69,7 +71,7 @@ async function saveUser(db: D1Database, user: RealtimeClaims) {
     .run()
 }
 
-function rowToSnapshot(row: RoomRow, participants: string[] = []) {
+function rowToSnapshot(row: RoomRow, participants: Attachment[] = []) {
   return {
     id: row.id,
     key: row.room_key,
@@ -82,7 +84,7 @@ function rowToSnapshot(row: RoomRow, participants: string[] = []) {
     endsAt: row.ends_at,
     version: row.version,
     serverNow: Date.now(),
-    participants,
+    participants: participants.map(({ participantId, name, image }) => ({ id: participantId, name, image })),
   }
 }
 
@@ -164,6 +166,7 @@ export default {
         const headers = new Headers(request.headers)
         headers.set("x-auth-user-id", user.sub)
         headers.set("x-auth-user-name", user.name ?? "Participante")
+        if (user.image) headers.set("x-auth-user-image", user.image)
         headers.set("sec-websocket-protocol", "ft-pomo")
         const id = env.ROOMS.idFromName(key)
         return env.ROOMS.get(id).fetch(new Request(request, { headers }))
@@ -192,12 +195,15 @@ export class PomodoroRoom extends DurableObject<Env> {
   }
 
   private participants() {
-    const names = new Set<string>()
+    const participants = new Map<string, Attachment>()
     for (const socket of this.ctx.getWebSockets()) {
       const attachment = socket.deserializeAttachment() as Attachment | null
-      if (attachment?.name) names.add(attachment.name)
+      if (!attachment?.userId || !attachment.name) continue
+      const participantId = attachment.participantId ?? crypto.randomUUID()
+      if (!attachment.participantId) socket.serializeAttachment({ ...attachment, participantId } satisfies Attachment)
+      participants.set(attachment.userId, { ...attachment, participantId })
     }
-    return [...names].sort((a, b) => a.localeCompare(b))
+    return [...participants.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
   private async sendSnapshot(target?: WebSocket) {
@@ -214,12 +220,13 @@ export class PomodoroRoom extends DurableObject<Env> {
   async fetch(request: Request) {
     const userId = request.headers.get("x-auth-user-id")
     const name = request.headers.get("x-auth-user-name")?.trim().slice(0, 40)
+    const image = request.headers.get("x-auth-user-image") ?? undefined
     if (!userId || !name) return json({ error: "Autenticação necessária" }, 401)
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
     this.ctx.acceptWebSocket(server)
-    server.serializeAttachment({ userId, name } satisfies Attachment)
+    server.serializeAttachment({ participantId: crypto.randomUUID(), userId, name, image } satisfies Attachment)
     await this.sendSnapshot()
     return new Response(null, { status: 101, webSocket: client, headers: { "sec-websocket-protocol": "ft-pomo" } })
   }
