@@ -3,7 +3,7 @@ export type TimerPhase = "work" | "break"
 
 export interface RoomParticipant {
   id: string
-  name: string
+  name?: string
   image?: string
 }
 

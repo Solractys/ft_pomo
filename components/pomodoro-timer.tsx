@@ -260,21 +260,22 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   )
 }
 
-function ParticipantAvatar({ name, image, animate }: { name: string; image?: string; animate: boolean }) {
-  const initials = name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase()
+function ParticipantAvatar({ name, image, animate }: { name?: string; image?: string; animate: boolean }) {
+  const displayName = typeof name === "string" && name.trim() ? name.trim() : "Participante"
+  const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase()
   const [imageFailed, setImageFailed] = useState(false)
 
-  return <div className="flex min-w-20 flex-col items-center gap-2" title={name}>
+  return <div className="flex min-w-20 flex-col items-center gap-2" title={displayName}>
     <div className={`participant-avatar-frame ${animate ? "participant-avatar-focus" : ""}`}>
       <div className="participant-avatar">
         {image && !imageFailed
           // Google avatar hosts vary by account, so render their URL directly instead of requiring a fixed image-host allowlist.
           // eslint-disable-next-line @next/next/no-img-element
-          ? <img src={image} alt={name} className="size-full rounded-full object-cover" onError={() => setImageFailed(true)} />
-          : <span role="img" aria-label={`Avatar de ${name}`} className="flex size-full items-center justify-center rounded-full text-sm font-semibold text-foreground">{initials || "?"}</span>}
+          ? <img src={image} alt={displayName} className="size-full rounded-full object-cover" onError={() => setImageFailed(true)} />
+          : <span role="img" aria-label={`Avatar de ${displayName}`} className="flex size-full items-center justify-center rounded-full text-sm font-semibold text-foreground">{initials || "?"}</span>}
       </div>
     </div>
-    <span className="max-w-24 truncate text-xs text-muted-foreground">{name}</span>
+    <span className="max-w-24 truncate text-xs text-muted-foreground">{displayName}</span>
   </div>
 }
 
