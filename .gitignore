@@ -3,4 +3,6 @@ node_modules
 next-env.d.ts
 .wrangler/
 .dev.vars
+.den.vars
+.env*.local
 *.tsbuildinfo
