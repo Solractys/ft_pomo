@@ -20,6 +20,10 @@ cp .env.example .env.local
 npm run worker:db:migrate:local
 ```
 
+Configure `AUTH_GOOGLE_ID` e `AUTH_GOOGLE_SECRET` com credenciais OAuth do Google. No Google Cloud, cadastre a origem `http://localhost:3000` e o callback `http://localhost:3000/api/auth/callback/google`. Para produção, cadastre também o domínio da Vercel e o callback `https://SEU-DOMINIO/api/auth/callback/google`.
+
+Gere segredos aleatórios separados para `AUTH_SECRET` e `REALTIME_JWT_SECRET`. Configure o primeiro no `.env.local` e na Vercel. Para o Worker local, copie `.dev.vars.example` para `.dev.vars`; para produção, cadastre `REALTIME_JWT_SECRET` com `npx wrangler secret put REALTIME_JWT_SECRET`. Use o mesmo valor de realtime na Vercel e no Worker.
+
 Em terminais separados:
 
 ```bash
@@ -35,6 +39,7 @@ Abra `http://localhost:3000`. O Worker local responde em `http://localhost:8787`
 npm run worker:typecheck
 npx tsc --noEmit
 npm run build
+npm test
 ```
 
 Para testar a sincronização, abra a mesma chave de sala em dois navegadores ou em uma janela anônima.
@@ -50,7 +55,10 @@ Para testar a sincronização, abra a mesma chave de sala em dois navegadores ou
 
 ## Regras atuais
 
-- Todos os participantes podem controlar o timer.
+- É necessário entrar com Google para criar ou acessar uma sala.
+- Todos os participantes autenticados podem controlar o timer.
+- O perfil soma apenas sessões de foco concluídas naturalmente.
+- O grupo de crédito é registrado no início do foco; entradas posteriores não recebem crédito.
 - Foco aceita de 1 a 120 minutos; pausa, de 1 a 60 minutos.
 - Salas expiram após 24 horas sem uma alteração no timer.
 - Salas expiradas são removidas diariamente.
