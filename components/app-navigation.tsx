@@ -55,7 +55,7 @@ export function AppNavigation({ userName, children }: { userName: string; childr
         aria-expanded={open}
         aria-controls="app-navigation-panel"
         onClick={() => setOpen((value) => !value)}
-        className="fixed left-4 top-4 z-50 inline-flex size-11 items-center justify-center rounded-xl border border-border bg-card text-card-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="fixed left-4 top-4 z-50 inline-flex size-11 cursor-pointer items-center justify-center rounded-xl border border-border bg-card text-card-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {open ? <X className="size-5" /> : <Menu className="size-5" />}
       </button>
@@ -95,7 +95,7 @@ export function AppNavigation({ userName, children }: { userName: string; childr
                 : joinQuery && href !== "/"
                   ? `${href}?${joinQuery}`
                   : href
-            return <Link key={href} href={destination} aria-current={active ? "page" : undefined} onClick={() => setOpen(false)} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"}`}><Icon className="size-4" />{label}</Link>
+            return <Link key={href} href={destination} aria-current={active ? "page" : undefined} onClick={() => setOpen(false)} className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"}`}><Icon className="size-4" />{label}</Link>
           })}
         </nav>
 

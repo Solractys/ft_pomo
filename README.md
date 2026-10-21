@@ -63,6 +63,9 @@ Para testar a sincronização, abra a mesma chave de sala em dois navegadores ou
 - O ranking semanal soma o tempo das sessões de foco concluídas entre segunda-feira 00:00 UTC e a segunda-feira seguinte. Quem opta por participar aparece com o nome da conta.
 - Cada sala pode ter uma meta coletiva por semana, de 1 a 500 horas. O progresso soma cada sessão de foco concluída uma vez, entre segunda-feira 00:00 UTC e a segunda-feira seguinte. Usuários autenticados com a chave da sala podem consultar ou criar o desafio.
 - Foco aceita de 1 a 120 minutos; pausa, de 1 a 60 minutos.
+- As configurações da sessão usam um controle circular arrastável, com os valores de foco e pausa editáveis no centro. A volta completa de foco acima de 60 minutos permanece marcada no anel.
+- Notificações de desktop são opcionais, dependem da permissão do navegador e ficam desligadas por padrão; a escolha é guardada neste navegador.
+- Na sala, copiar o código, ver o estado da conexão, abrir configurações e sair ficam juntos em uma linha de quatro controles.
 - Salas expiram após 24 horas sem uma alteração no timer.
 - Salas expiradas são removidas diariamente.
 - Participantes são presença em tempo real e não ficam armazenados no banco.

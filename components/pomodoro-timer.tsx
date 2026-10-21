@@ -1,13 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { ArrowLeft, Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff } from "lucide-react"
+import { ArrowLeft, Bell, Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff, X } from "lucide-react"
 import { createRoom, getRoom, roomSocketUrl } from "@/lib/pomodoro/api"
 import { getRealtimeToken } from "@/lib/auth/token"
 import type { RoomCommand, RoomSnapshot, ServerMessage } from "@/lib/pomodoro/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { PomodoroTimePicker } from "@/components/pomodoro-time-picker"
 import { useToast } from "@/hooks/use-toast"
 
 type Screen = "choice" | "join" | "created" | "loading" | "room"
@@ -29,6 +30,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   const [workMinutes, setWorkMinutes] = useState(25)
   const [breakMinutes, setBreakMinutes] = useState(5)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
+  const notificationsEnabledRef = useRef(false)
   const socketRef = useRef<WebSocket | null>(null)
   const connectRef = useRef<(roomKey: string, userName: string) => void>(() => undefined)
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -70,7 +72,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
       audioRef.current?.play().catch(() => undefined)
       const message = snapshot.phase === "break" ? "Hora da pausa." : "De volta ao foco."
       toast({ title: "Tempo encerrado!", description: message })
-      if (document.hidden && "Notification" in window && Notification.permission === "granted") new Notification("FT_POMODORO", { body: message })
+      if (document.hidden && notificationsEnabledRef.current && "Notification" in window && Notification.permission === "granted") new Notification("FT_POMODORO", { body: message })
     }
     previousRoomRef.current = snapshot
   }, [toast])
@@ -209,14 +211,38 @@ export function PomodoroTimer({ userName }: { userName: string }) {
     toast({ title: "Link copiado" })
   }
 
-  const enableNotifications = async () => {
+  const toggleNotifications = async () => {
+    if (notificationsEnabledRef.current) {
+      notificationsEnabledRef.current = false
+      setNotificationsEnabled(false)
+      try { window.localStorage.setItem("ft-pomo-desktop-notifications", "disabled") } catch { /* Preferences remain available for this session. */ }
+      return
+    }
     if (!("Notification" in window)) {
       toast({ title: "Notificações indisponíveis", description: "Este navegador não oferece notificações de desktop." })
       return
     }
-    const permission = await Notification.requestPermission()
-    setNotificationsEnabled(permission === "granted")
-    toast({ title: permission === "granted" ? "Notificações ativadas" : "Permissão não concedida" })
+    try {
+      const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission()
+      const enabled = permission === "granted"
+      notificationsEnabledRef.current = enabled
+      setNotificationsEnabled(enabled)
+      try { window.localStorage.setItem("ft-pomo-desktop-notifications", enabled ? "enabled" : "disabled") } catch { /* Preferences remain available for this session. */ }
+      toast({ title: enabled ? "Notificações ativadas" : "Permissão não concedida" })
+    } catch {
+      toast({ title: "Não foi possível ativar as notificações", description: "Confira as permissões do navegador." })
+    }
+  }
+
+  const openSettings = () => {
+    let enabled = false
+    try {
+      enabled = window.localStorage.getItem("ft-pomo-desktop-notifications") === "enabled" &&
+        "Notification" in window && Notification.permission === "granted"
+    } catch { /* Storage may be unavailable; keep notifications disabled by default. */ }
+    notificationsEnabledRef.current = enabled
+    setNotificationsEnabled(enabled)
+    setShowSettings(true)
   }
 
   if (screen === "choice") return (
@@ -250,11 +276,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   )
 
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-background p-4 pt-20 text-foreground sm:pt-24">
-      <div className="absolute right-4 top-4 flex max-w-[calc(100%-2rem)] flex-wrap items-center justify-end gap-2 sm:right-5 sm:top-5">
-        <button onClick={copyLink} aria-label={`Copiar link da sala ${key}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="text-muted-foreground">Sala</span><span className="font-mono font-semibold">{key}</span><Copy className="size-4 text-muted-foreground" /></button>
-        <span title={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} aria-label={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} className={`inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm ${connection === "connected" ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>{connection === "connected" ? <Wifi className="size-4" /> : <WifiOff className="size-4" />}<span className="text-foreground">{connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"}</span></span>
-      </div>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-background p-4 text-foreground">
       <section className="space-y-10 text-center">
         <div><h1 className="font-mono text-7xl font-bold tabular-nums tracking-tighter sm:text-9xl">{formatTime(displayMs)}</h1><p className="mt-3 text-sm font-medium uppercase tracking-[0.3em] text-muted-foreground">{room?.phase === "work" ? "foco" : "pausa"}</p></div>
         <div className="flex justify-center gap-4">
@@ -263,9 +285,53 @@ export function PomodoroTimer({ userName }: { userName: string }) {
           <Button aria-label="Alternar entre foco e pausa" onClick={() => send({ type: "switch" })} variant="outline" className="h-16 w-16 rounded-full p-0"><Check /></Button>
         </div>
       </section>
-      <div className="flex flex-wrap justify-center gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" className="min-h-11"><Settings className="h-4 w-4" />Configurações</Button><Button onClick={leave} variant="outline" className="min-h-11"><LogOut className="h-4 w-4" />Sair da sala</Button></div>
+      <div className="grid w-full max-w-2xl grid-cols-4 gap-2">
+        <button onClick={copyLink} aria-label={`Copiar link da sala ${key}`} className="inline-flex h-11 min-w-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-border bg-card px-1 text-[10px] transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:gap-2 sm:px-3 sm:text-sm"><Copy className="size-4 shrink-0 text-muted-foreground" /><span>Sala {key}</span></button>
+        <span title={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} aria-label={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} className={`inline-flex h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-md border border-border bg-card px-1 text-[10px] sm:flex-row sm:gap-2 sm:px-3 sm:text-sm ${connection === "connected" ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>{connection === "connected" ? <Wifi className="size-4 shrink-0" /> : <WifiOff className="size-4 shrink-0" />}<span className="text-foreground">{connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"}</span></span>
+        <Button onClick={openSettings} variant="outline" className="h-11 min-w-0 flex-col gap-1 px-1 text-[10px] sm:flex-row sm:gap-2 sm:px-3 sm:text-sm"><Settings className="size-4" />Config.</Button>
+        <Button onClick={leave} variant="outline" className="h-11 min-w-0 flex-col gap-1 px-1 text-[10px] sm:flex-row sm:gap-2 sm:px-3 sm:text-sm"><LogOut className="size-4" />Sair</Button>
+      </div>
       {!!room?.participants.length && <section aria-label="Participantes" className="space-y-3"><p className="text-center text-xs text-muted-foreground">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-4">{room.participants.map((participant) => <ParticipantAvatar key={participant.id} name={participant.name} image={participant.image} animate={room.status === "running" && room.phase === "work"} />)}</div></section>}
-      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false) }}><Card role="dialog" aria-modal="true" aria-labelledby="settings-title" className="w-full max-w-md space-y-5 p-6"><h2 id="settings-title" className="text-lg font-bold">Configurações</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} /></Field><Button onClick={enableNotifications} variant="outline" className="w-full">{notificationsEnabled ? "Notificações ativadas" : "Ativar notificações de desktop"}</Button><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="min-h-11 flex-1">Fechar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="min-h-11 flex-1">Salvar</Button></div></Card></div>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-2 sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false) }}>
+        <Card role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-description" className="my-auto max-h-[calc(100dvh-1rem)] w-full max-w-4xl overflow-y-auto p-4 sm:max-h-[calc(100dvh-2rem)] sm:p-7">
+          <header className="mb-6 flex items-start justify-between gap-4 sm:mb-8">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Sua sessão</p>
+              <h2 id="settings-title" className="text-xl font-bold sm:text-2xl">Ajuste seu Pomodoro</h2>
+              <p id="settings-description" className="text-sm text-muted-foreground">Arraste os círculos ou digite os minutos no centro.</p>
+            </div>
+            <Button type="button" variant="ghost" size="icon" aria-label="Fechar configurações" onClick={() => setShowSettings(false)} className="shrink-0"><X className="size-5" /></Button>
+          </header>
+          <div className="grid gap-5 md:grid-cols-[minmax(0,1.2fr)_minmax(15rem,.8fr)] md:gap-5">
+            <section aria-label="Duração da sessão" className="flex items-center justify-center">
+              <PomodoroTimePicker workMinutes={workMinutes} breakMinutes={breakMinutes} onWorkChange={setWorkMinutes} onBreakChange={setBreakMinutes} />
+            </section>
+            <aside className="flex flex-col gap-4">
+              <div className="space-y-1">
+                <h3 className="font-semibold">Preferências</h3>
+                <p className="text-sm text-muted-foreground">Escolha como quer acompanhar sua sessão.</p>
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
+                <div className="flex items-start gap-3">
+                  <Bell className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+                  <div>
+                    <p className="text-sm font-medium">Notificações de desktop</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Avisam quando o timer termina e a página está em segundo plano.</p>
+                  </div>
+                </div>
+        <button type="button" role="switch" aria-checked={notificationsEnabled} aria-label="Ativar notificações de desktop" onClick={toggleNotifications} className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${notificationsEnabled ? "bg-primary" : "bg-muted"}`}>
+                  <span className={`inline-block size-5 rounded-full bg-background shadow-sm transition-transform ${notificationsEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                </button>
+              </div>
+              <p className="rounded-xl bg-muted/60 p-4 text-xs leading-relaxed text-muted-foreground">As durações escolhidas serão aplicadas à sala ao salvar. Foco pode ter até 2 horas; pausa, até 60 minutos.</p>
+            </aside>
+          </div>
+          <footer className="mt-6 flex flex-col-reverse gap-3 border-t border-border pt-5 sm:mt-8 sm:flex-row sm:justify-end">
+            <Button type="button" onClick={() => setShowSettings(false)} variant="outline" className="min-h-11 sm:min-w-32">Cancelar</Button>
+            <Button type="button" onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="min-h-11 sm:min-w-40">Salvar sessão</Button>
+          </footer>
+        </Card>
+      </div>}
     </main>
   )
 }
