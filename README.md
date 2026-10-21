@@ -59,6 +59,9 @@ Para testar a sincronização, abra a mesma chave de sala em dois navegadores ou
 - Todos os participantes autenticados podem controlar o timer.
 - O perfil soma apenas sessões de foco concluídas naturalmente.
 - O grupo de crédito é registrado no início do foco; entradas posteriores não recebem crédito.
+- Usuários autenticados podem consultar o ranking semanal fora de uma sala. A participação é opcional e vem desativada por padrão.
+- O ranking semanal soma o tempo das sessões de foco concluídas entre segunda-feira 00:00 UTC e a segunda-feira seguinte. Quem opta por participar aparece com o nome da conta.
+- Cada sala pode ter uma meta coletiva por semana, de 1 a 500 horas. O progresso soma cada sessão de foco concluída uma vez, entre segunda-feira 00:00 UTC e a segunda-feira seguinte. Usuários autenticados com a chave da sala podem consultar ou criar o desafio.
 - Foco aceita de 1 a 120 minutos; pausa, de 1 a 60 minutos.
 - Salas expiram após 24 horas sem uma alteração no timer.
 - Salas expiradas são removidas diariamente.

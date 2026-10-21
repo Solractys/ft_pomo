@@ -8,7 +8,6 @@ import "./globals.css"
 
 import { Toaster } from "@/components/ui/toaster"
 import { ThemeProvider } from "@/components/theme-provider"
-import { ThemeControls } from "@/components/theme-controls"
 
 const geistSans = Geist({ subsets: ["latin"], variable: "--font-geist-sans", display: "swap" })
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap" })
@@ -45,7 +44,6 @@ export default function RootLayout({
     <html lang="pt-BR" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="ft-pomo-color-mode">
-          <ThemeControls />
           {children}
           <a
             href="https://github.com/Solractys/ft_pomo"

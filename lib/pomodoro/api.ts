@@ -26,6 +26,37 @@ export const getRoom = (key: string) => request(`/rooms/${encodeURIComponent(key
 
 export const getProfile = () => request<{ user: { name?: string; email?: string; image?: string }; totalFocusedMs: number; completedSessions: number }>("/profile")
 
+export type WeeklyLeaderboard = {
+  weekStart: number
+  weekEnd: number
+  optedIn: boolean
+  ownFocusedMs: number
+  ownRank: number | null
+  entries: Array<{ userId: string; name: string; focusedMs: number; rank: number }>
+}
+
+export const getWeeklyLeaderboard = () => request<WeeklyLeaderboard>("/leaderboard")
+
+export const setLeaderboardOptIn = (enabled: boolean) => request<{ optedIn: boolean }>("/leaderboard/opt-in", {
+  method: "POST",
+  body: JSON.stringify({ enabled }),
+})
+
+export type RoomChallenge = {
+  id: string
+  weekStart: number
+  weekEnd: number
+  targetMs: number
+  progressMs: number
+}
+
+export const getRoomChallenge = (roomKey: string) => request<{ challenge: RoomChallenge | null }>(`/rooms/${encodeURIComponent(roomKey.toUpperCase())}/challenge`)
+
+export const createRoomChallenge = (roomKey: string, targetHours: number) => request<{ challenge: RoomChallenge }>(`/rooms/${encodeURIComponent(roomKey.toUpperCase())}/challenge`, {
+  method: "POST",
+  body: JSON.stringify({ targetHours }),
+})
+
 export function roomSocketUrl(key: string, token: string) {
   const url = new URL(`${apiUrl()}/rooms/${encodeURIComponent(key.toUpperCase())}/ws`)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"

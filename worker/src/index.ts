@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers"
 import { captureAttendeeIds, shouldCompleteFocusSession } from "./focus-credit"
 import { verifyRealtimeToken, type RealtimeClaims } from "./auth-token"
+import { startOfUtcWeek } from "./utc-week"
 
 type Status = "idle" | "running" | "paused"
 type Phase = "work" | "break"
@@ -35,6 +36,7 @@ interface Attachment {
 }
 
 const DAY_MS = 86_400_000
+const WEEK_MS = DAY_MS * 7
 
 const json = (body: unknown, status = 200, origin = "*") =>
   Response.json(body, {
@@ -94,6 +96,27 @@ async function findRoom(db: D1Database, key: string) {
     .first<RoomRow>()
 }
 
+async function roomExpiresAt(db: D1Database, roomId: string, now: number) {
+  const weekStart = startOfUtcWeek(now)
+  const challenge = await db.prepare(`SELECT week_start + ? AS week_end FROM room_challenges
+    WHERE room_id = ? AND week_start = ?`)
+    .bind(WEEK_MS, roomId, weekStart)
+    .first<{ week_end: number }>()
+  return Math.max(now + DAY_MS, challenge?.week_end ?? 0)
+}
+
+async function roomChallengeSnapshot(db: D1Database, roomId: string, weekStart: number) {
+  return db.prepare(`SELECT rc.id, rc.week_start, rc.target_ms,
+    COALESCE(SUM(fs.duration_ms), 0) AS progress_ms
+    FROM room_challenges rc
+    LEFT JOIN focus_sessions fs ON fs.room_id = rc.room_id
+      AND fs.completed_at >= rc.week_start AND fs.completed_at < rc.week_start + ?
+    WHERE rc.room_id = ? AND rc.week_start = ?
+    GROUP BY rc.id`)
+    .bind(WEEK_MS, roomId, weekStart)
+    .first<{ id: string; week_start: number; target_ms: number; progress_ms: number }>()
+}
+
 function newRoomKey() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
   const bytes = crypto.getRandomValues(new Uint8Array(6))
@@ -114,7 +137,7 @@ export default {
     })
 
     const url = new URL(request.url)
-    const match = url.pathname.match(/^\/rooms\/([A-Z0-9]{6})(\/ws)?$/i)
+    const match = url.pathname.match(/^\/rooms\/([A-Z0-9]{6})(\/ws|\/challenge)?$/i)
 
     if (request.method === "GET" && url.pathname === "/profile") {
       const user = await authenticate(request, env)
@@ -132,6 +155,82 @@ export default {
     const user = await authenticate(request, env)
     if (!user) return json({ error: "Faça login com Google para usar as salas" }, 401, origin)
     await saveUser(env.DB, user)
+
+    if (request.method === "GET" && url.pathname === "/leaderboard") {
+      const weekStart = startOfUtcWeek(Date.now())
+      const weekEnd = weekStart + WEEK_MS
+      const ranking = await env.DB.prepare(`WITH weekly AS (
+        SELECT u.id AS user_id, COALESCE(u.display_name, 'Participante') AS display_name,
+          SUM(fs.duration_ms) AS focused_ms
+        FROM users u
+        JOIN focus_session_attendees fsa ON fsa.user_id = u.id
+        JOIN focus_sessions fs ON fs.id = fsa.session_id
+        WHERE u.leaderboard_opt_in = 1 AND fs.completed_at >= ? AND fs.completed_at < ?
+        GROUP BY u.id
+      ), ranked AS (
+        SELECT user_id, display_name, focused_ms,
+          RANK() OVER (ORDER BY focused_ms DESC) AS rank
+        FROM weekly
+      )
+      SELECT user_id, display_name, focused_ms, rank
+      FROM ranked
+      ORDER BY focused_ms DESC, display_name COLLATE NOCASE ASC, user_id ASC
+      LIMIT 100`)
+        .bind(weekStart, weekEnd)
+        .all<{ user_id: string; display_name: string; focused_ms: number; rank: number }>()
+      const own = await env.DB.prepare(`SELECT u.leaderboard_opt_in,
+        COALESCE(SUM(fs.duration_ms), 0) AS focused_ms
+        FROM users u
+        LEFT JOIN focus_session_attendees fsa ON fsa.user_id = u.id
+        LEFT JOIN focus_sessions fs ON fs.id = fsa.session_id
+          AND fs.completed_at >= ? AND fs.completed_at < ?
+        WHERE u.id = ?
+        GROUP BY u.id`)
+        .bind(weekStart, weekEnd, user.sub)
+        .first<{ leaderboard_opt_in: number; focused_ms: number }>()
+      const ownRank = own?.leaderboard_opt_in
+        ? await env.DB.prepare(`WITH weekly AS (
+            SELECT u.id AS user_id, SUM(fs.duration_ms) AS focused_ms
+            FROM users u
+            JOIN focus_session_attendees fsa ON fsa.user_id = u.id
+            JOIN focus_sessions fs ON fs.id = fsa.session_id
+            WHERE u.leaderboard_opt_in = 1 AND fs.completed_at >= ? AND fs.completed_at < ?
+            GROUP BY u.id
+          ), ranked AS (
+            SELECT user_id, RANK() OVER (ORDER BY focused_ms DESC) AS rank FROM weekly
+          )
+          SELECT rank FROM ranked WHERE user_id = ?`)
+            .bind(weekStart, weekEnd, user.sub)
+            .first<{ rank: number }>()
+        : null
+      return json({
+        weekStart,
+        weekEnd,
+        optedIn: own?.leaderboard_opt_in === 1,
+        ownFocusedMs: own?.focused_ms ?? 0,
+        ownRank: ownRank?.rank ?? null,
+        entries: ranking.results.map((entry) => ({
+          userId: entry.user_id,
+          name: entry.display_name,
+          focusedMs: entry.focused_ms,
+          rank: entry.rank,
+        })),
+      }, 200, origin)
+    }
+
+    if (request.method === "POST" && url.pathname === "/leaderboard/opt-in") {
+      let body: { enabled?: unknown }
+      try {
+        body = await request.json() as { enabled?: unknown }
+      } catch {
+        return json({ error: "Corpo JSON inválido" }, 400, origin)
+      }
+      if (typeof body.enabled !== "boolean") return json({ error: "Informe se deseja participar" }, 400, origin)
+      await env.DB.prepare("UPDATE users SET leaderboard_opt_in = ?, updated_at = ? WHERE id = ?")
+        .bind(body.enabled ? 1 : 0, Date.now(), user.sub)
+        .run()
+      return json({ optedIn: body.enabled }, 200, origin)
+    }
 
     if (request.method === "POST" && url.pathname === "/rooms") {
       const now = Date.now()
@@ -170,6 +269,47 @@ export default {
         headers.set("sec-websocket-protocol", "ft-pomo")
         const id = env.ROOMS.idFromName(key)
         return env.ROOMS.get(id).fetch(new Request(request, { headers }))
+      }
+
+      if (match[2] === "/challenge") {
+        if (request.method === "GET") {
+          const challenge = await roomChallengeSnapshot(env.DB, room.id, startOfUtcWeek(Date.now()))
+          return json({ challenge: challenge ? {
+            id: challenge.id,
+            weekStart: challenge.week_start,
+            weekEnd: challenge.week_start + WEEK_MS,
+            targetMs: challenge.target_ms,
+            progressMs: challenge.progress_ms,
+          } : null }, 200, origin)
+        }
+        if (request.method !== "POST") return json({ error: "Método não permitido" }, 405, origin)
+        let body: { targetHours?: unknown }
+        try {
+          body = await request.json() as { targetHours?: unknown }
+        } catch {
+          return json({ error: "Corpo JSON inválido" }, 400, origin)
+        }
+        if (typeof body.targetHours !== "number" || !Number.isInteger(body.targetHours) || body.targetHours < 1 || body.targetHours > 500) {
+          return json({ error: "A meta deve ter entre 1 e 500 horas" }, 400, origin)
+        }
+        const now = Date.now()
+        const weekStart = startOfUtcWeek(now)
+        await env.DB.prepare(`INSERT INTO room_challenges (id, room_id, week_start, target_ms, created_by, created_at)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(room_id, week_start) DO NOTHING`)
+          .bind(crypto.randomUUID(), room.id, weekStart, body.targetHours * 3_600_000, user.sub, now)
+          .run()
+        await env.DB.prepare("UPDATE rooms SET expires_at = MAX(expires_at, ?) WHERE id = ?")
+          .bind(weekStart + WEEK_MS, room.id)
+          .run()
+        const challenge = await roomChallengeSnapshot(env.DB, room.id, weekStart)
+        if (!challenge) return json({ error: "Não foi possível criar o desafio" }, 500, origin)
+        return json({ challenge: {
+          id: challenge.id,
+          weekStart: challenge.week_start,
+          weekEnd: challenge.week_start + WEEK_MS,
+          targetMs: challenge.target_ms,
+          progressMs: challenge.progress_ms,
+        } }, 201, origin)
       }
 
       if (request.method === "GET") return json(rowToSnapshot(room), 200, origin)
@@ -296,10 +436,11 @@ export class PomodoroRoom extends DurableObject<Env> {
         throw new Error("Comando inválido")
       }
 
+      const expiresAt = await roomExpiresAt(this.env.DB, room.id, now)
       await this.env.DB.prepare(`UPDATE rooms SET status = ?, phase = ?, work_duration_ms = ?,
         break_duration_ms = ?, remaining_ms = ?, started_at = ?, ends_at = ?, active_focus_session_id = ?, version = version + 1,
         updated_at = ?, expires_at = ? WHERE id = ?`)
-        .bind(status, phase, workDuration, breakDuration, remaining, startedAt, endsAt, activeFocusSessionId, now, now + DAY_MS, room.id)
+        .bind(status, phase, workDuration, breakDuration, remaining, startedAt, endsAt, activeFocusSessionId, now, expiresAt, room.id)
         .run()
 
       if (endsAt) await this.ctx.storage.setAlarm(endsAt)

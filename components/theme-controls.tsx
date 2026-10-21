@@ -57,7 +57,7 @@ export function ThemeControls() {
   }, [palette, ready])
 
   return (
-    <details ref={menuRef} className="theme-menu fixed left-4 top-4 z-40">
+    <details ref={menuRef} className="theme-menu theme-menu-sidebar">
       <summary aria-label="Personalizar aparência" title="Personalizar aparência">
         <MonitorCog className="size-4" />
         <span className="hidden sm:inline">Aparência</span>
