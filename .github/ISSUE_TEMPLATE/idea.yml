@@ -1,0 +1,28 @@
+name: Propor uma ideia
+description: Sugira uma funcionalidade ou uma nova possibilidade para o projeto.
+title: "[Ideia]: "
+body:
+  - type: markdown
+    attributes:
+      value: Compartilhe a ideia e o problema ou necessidade que ela ajudaria a resolver.
+  - type: textarea
+    id: need
+    attributes:
+      label: Qual necessidade essa ideia atende?
+      description: Conte o contexto ou a dificuldade que você encontrou.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Como poderia funcionar?
+      description: Descreva sua proposta. Um exemplo de uso também ajuda.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: Alguma outra forma de resolver isso? (Opcional.)
+    validations:
+      required: false

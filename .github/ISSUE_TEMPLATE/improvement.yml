@@ -1,0 +1,25 @@
+name: Sugerir uma melhoria
+description: Aprimore uma funcionalidade ou fluxo que já existe.
+title: "[Melhoria]: "
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: Como funciona hoje?
+      description: Aponte a tela, funcionalidade ou fluxo que poderia melhorar.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: O que você sugere?
+      description: Explique a mudança e como ela ajudaria as pessoas que usam o projeto.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Exemplo ou referência
+      description: Inclua um exemplo, imagem ou link, se tiver.
+    validations:
+      required: false

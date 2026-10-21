@@ -1,0 +1,25 @@
+name: Melhorar a documentação
+description: Avise sobre algo confuso, incorreto ou que está faltando na documentação.
+title: "[Documentação]: "
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Onde está o trecho?
+      description: Informe a página, arquivo ou seção.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: O que precisa mudar?
+      description: Explique o que está confuso, incorreto ou faltando.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Sugestão de texto ou solução
+      description: Se quiser, proponha uma correção.
+    validations:
+      required: false
