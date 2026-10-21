@@ -1,0 +1,46 @@
+name: Relatar um defeito
+description: Conte o que não está funcionando como esperado.
+title: "[Defeito]: "
+body:
+  - type: markdown
+    attributes:
+      value: Obrigado por ajudar a melhorar o FT Pomodoro. Descreva o problema com detalhes que ajudem a reproduzi-lo.
+  - type: textarea
+    id: problem
+    attributes:
+      label: O que aconteceu?
+      description: Explique o defeito e, se possível, inclua uma captura de tela.
+      placeholder: Ao entrar em uma sala...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Como reproduzir?
+      description: Liste os passos que levam ao problema.
+      placeholder: |
+        1. Abra...
+        2. Clique em...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que você esperava que acontecesse?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Navegador e dispositivo
+      description: Exemplo: Firefox no Android 15.
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Mais informações
+      description: Inclua mensagens de erro ou outros detalhes úteis.
+    validations:
+      required: false
