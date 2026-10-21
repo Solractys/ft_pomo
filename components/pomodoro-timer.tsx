@@ -1,8 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import Link from "next/link"
-import { ArrowLeft, Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, UserRound, Wifi, WifiOff } from "lucide-react"
+import { ArrowLeft, Check, Copy, LogOut, Pause, Play, RotateCcw, Settings, Wifi, WifiOff } from "lucide-react"
 import { createRoom, getRoom, roomSocketUrl } from "@/lib/pomodoro/api"
 import { getRealtimeToken } from "@/lib/auth/token"
 import type { RoomCommand, RoomSnapshot, ServerMessage } from "@/lib/pomodoro/types"
@@ -117,11 +116,23 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const queryKey = params.get("session")?.toUpperCase()
-    if (!queryKey || !/^[A-Z0-9]{6}$/.test(queryKey)) return
+    if (!queryKey || !/^[A-Z0-9]{6}$/.test(queryKey)) {
+      if (params.get("flow") !== "join") return
+      const draftKey = params.get("join")?.toUpperCase().slice(0, 6) ?? ""
+      const timeout = window.setTimeout(() => {
+        setKey(draftKey)
+        setScreen("join")
+      }, 0)
+      return () => window.clearTimeout(timeout)
+    }
 
     let cancelled = false
     const timeout = window.setTimeout(() => {
       setKey(queryKey)
+      if (params.get("return") === "created") {
+        setScreen("created")
+        return
+      }
       if (params.get("return") !== "room") {
         setScreen("join")
         return
@@ -156,6 +167,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
       setKey(created.key)
       setRoom(created)
       setScreen("created")
+      history.replaceState(null, "", `/?session=${created.key}&return=created`)
       await navigator.clipboard.writeText(`${window.location.origin}?session=${created.key}`).catch(() => undefined)
       toast({ title: "Sala criada", description: "Link copiado para a área de transferência." })
     } catch (error) {
@@ -209,17 +221,16 @@ export function PomodoroTimer({ userName }: { userName: string }) {
 
   if (screen === "choice") return (
     <Shell title="FT_POMODORO" subtitle="Timer sincronizado para focar junto.">
-      <Link href="/profile" className="mx-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><UserRound className="size-4" />Meu perfil</Link>
-      <Button onClick={() => setScreen("join")} className="h-14 w-full text-lg">Entrar em uma sala</Button>
+      <Button onClick={() => { setScreen("join"); history.replaceState(null, "", "/?flow=join") }} className="h-14 w-full text-lg">Entrar em uma sala</Button>
       <Button onClick={handleCreate} variant="outline" className="h-14 w-full text-lg">Criar nova sala</Button>
     </Shell>
   )
 
   if (screen === "join") return (
     <Shell title="ENTRAR NA SALA" subtitle="Informe a chave compartilhada.">
-      <Field label="Chave da sala"><Input value={key} onChange={(event) => setKey(event.target.value.toUpperCase())} maxLength={6} className="font-mono text-center text-xl tracking-widest" autoFocus /></Field>
+      <Field label="Chave da sala"><Input value={key} onChange={(event) => { const nextKey = event.target.value.toUpperCase().slice(0, 6); setKey(nextKey); history.replaceState(null, "", nextKey ? `/?flow=join&join=${nextKey}` : "/?flow=join") }} maxLength={6} className="font-mono text-center text-xl tracking-widest" autoFocus /></Field>
       <p className="text-xs text-muted-foreground">Entrando como {userName}</p>
-      <div className="flex gap-3"><Button onClick={() => setScreen("choice")} variant="outline" className="min-h-11 flex-1"><ArrowLeft />Voltar</Button><Button onClick={handleJoin} className="min-h-11 flex-1">Entrar</Button></div>
+      <div className="flex gap-3"><Button onClick={() => { setScreen("choice"); history.replaceState(null, "", window.location.pathname) }} variant="outline" className="min-h-11 flex-1"><ArrowLeft />Voltar</Button><Button onClick={handleJoin} className="min-h-11 flex-1">Entrar</Button></div>
     </Shell>
   )
 
@@ -241,7 +252,6 @@ export function PomodoroTimer({ userName }: { userName: string }) {
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-background p-4 pt-20 text-foreground sm:pt-24">
       <div className="absolute right-4 top-4 flex max-w-[calc(100%-2rem)] flex-wrap items-center justify-end gap-2 sm:right-5 sm:top-5">
-        <Link href={`/profile?session=${key}`} className="hidden min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline-flex"><UserRound className="size-4" />Meu perfil</Link>
         <button onClick={copyLink} aria-label={`Copiar link da sala ${key}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="text-muted-foreground">Sala</span><span className="font-mono font-semibold">{key}</span><Copy className="size-4 text-muted-foreground" /></button>
         <span title={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} aria-label={connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"} className={`inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm ${connection === "connected" ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>{connection === "connected" ? <Wifi className="size-4" /> : <WifiOff className="size-4" />}<span className="text-foreground">{connection === "connected" ? "Conectado" : connection === "connecting" ? "Conectando" : "Sem conexão"}</span></span>
       </div>
@@ -253,7 +263,7 @@ export function PomodoroTimer({ userName }: { userName: string }) {
           <Button aria-label="Alternar entre foco e pausa" onClick={() => send({ type: "switch" })} variant="outline" className="h-16 w-16 rounded-full p-0"><Check /></Button>
         </div>
       </section>
-      <div className="flex flex-wrap justify-center gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" className="min-h-11"><Settings className="h-4 w-4" />Configurações</Button><Button onClick={leave} variant="outline" className="min-h-11"><LogOut className="h-4 w-4" />Sair da sala</Button><Link href={`/profile?session=${key}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"><UserRound className="size-4" />Meu perfil</Link></div>
+      <div className="flex flex-wrap justify-center gap-2"><Button onClick={() => setShowSettings(true)} variant="outline" className="min-h-11"><Settings className="h-4 w-4" />Configurações</Button><Button onClick={leave} variant="outline" className="min-h-11"><LogOut className="h-4 w-4" />Sair da sala</Button></div>
       {!!room?.participants.length && <section aria-label="Participantes" className="space-y-3"><p className="text-center text-xs text-muted-foreground">Participantes ({room.participants.length})</p><div className="flex flex-wrap justify-center gap-4">{room.participants.map((participant) => <ParticipantAvatar key={participant.id} name={participant.name} image={participant.image} animate={room.status === "running" && room.phase === "work"} />)}</div></section>}
       {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false) }}><Card role="dialog" aria-modal="true" aria-labelledby="settings-title" className="w-full max-w-md space-y-5 p-6"><h2 id="settings-title" className="text-lg font-bold">Configurações</h2><Field label="Foco (minutos)"><Input type="number" min={1} max={120} value={workMinutes} onChange={(event) => setWorkMinutes(Math.max(1, Number(event.target.value)))} /></Field><Field label="Pausa (minutos)"><Input type="number" min={1} max={60} value={breakMinutes} onChange={(event) => setBreakMinutes(Math.max(1, Number(event.target.value)))} /></Field><Button onClick={enableNotifications} variant="outline" className="w-full">{notificationsEnabled ? "Notificações ativadas" : "Ativar notificações de desktop"}</Button><div className="flex gap-3"><Button onClick={() => setShowSettings(false)} variant="outline" className="min-h-11 flex-1">Fechar</Button><Button onClick={() => { send({ type: "settings", workDurationMs: workMinutes * 60_000, breakDurationMs: breakMinutes * 60_000 }); setShowSettings(false) }} className="min-h-11 flex-1">Salvar</Button></div></Card></div>}
     </main>
